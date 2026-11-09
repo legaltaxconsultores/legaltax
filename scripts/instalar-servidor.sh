@@ -89,9 +89,11 @@ fi
 c_step "Preparando usuario y carpetas…"
 id legaltax >/dev/null 2>&1 || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin legaltax
 mkdir -p "$DATA_DIR/storage" "$DATA_DIR/backups"
+git config --global --get-all safe.directory 2>/dev/null | grep -qx "$APP_DIR" || git config --global --add safe.directory "$APP_DIR"
 if [ -d "$APP_DIR/.git" ]; then
-  git -C "$APP_DIR" fetch -q origin main && git -C "$APP_DIR" reset -q --hard origin/main
-  c_ok "Sistema actualizado a la última versión"
+  git -C "$APP_DIR" fetch -q origin main
+  git -C "$APP_DIR" reset -q --hard origin/main
+  c_ok "Sistema actualizado a la última versión ($(git -C "$APP_DIR" log -1 --format=%h))"
 else
   rm -rf "$APP_DIR"; git clone -q --depth 1 "$REPO" "$APP_DIR"
   c_ok "Sistema descargado en $APP_DIR"
