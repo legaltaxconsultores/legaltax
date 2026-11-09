@@ -1,0 +1,58 @@
+{
+  "name": "legaltax-escritorio",
+  "productName": "LegalTax Consultores",
+  "version": "1.0.0",
+  "description": "Aplicación de escritorio de LegalTax Consultores SRL",
+  "author": "LegalTax Consultores SRL",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win nsis --x64",
+    "build:mac": "electron-builder --mac dmg"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "do.legaltax.escritorio",
+    "productName": "LegalTax Consultores",
+    "copyright": "LegalTax Consultores SRL",
+    "files": [
+      "main.js",
+      "preload.js",
+      "pages/**",
+      "build/icon.png",
+      "build/icon.ico"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LegalTax Consultores",
+      "artifactName": "LegalTax-Escritorio-Setup-${version}.exe",
+      "language": "3082"
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.business"
+    },
+    "publish": null
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/legaltaxconsultores/legaltax.git"
+  }
+}

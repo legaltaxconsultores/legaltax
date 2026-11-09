@@ -74,7 +74,8 @@ async function updateRow(c, table, id, fields) {
 function sendFile(res, abs, filename, mime, inline) {
   if (!fs.existsSync(abs)) return res.status(404).json({ error: 'Archivo no disponible' });
   res.set('Content-Type', mime);
-  res.set('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  const ascii = String(filename).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  res.set('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
   res.set('Cache-Control', 'private, no-store');
   fs.createReadStream(abs).pipe(res);
 }

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>LegalTax — Conectar con el servidor</title>
+<style>
+  :root { --brand: #876440; --dark: #6E5034; --ink: #2B2520; --muted: #6F665D; --line: #E3DED7; --bg: #F6F5F3; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", -apple-system, Roboto, Arial, sans-serif; background: var(--bg); color: var(--ink); display: grid; place-items: center; min-height: 100vh; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 34px 38px; width: min(560px, 92vw); box-shadow: 0 8px 30px rgba(74,54,34,.08); }
+  img { display: block; height: 120px; margin: 0 auto 10px; }
+  h1 { font-size: 1.25rem; color: var(--dark); margin: 6px 0 6px; text-align: center; }
+  p { color: var(--muted); line-height: 1.5; margin: 0 0 18px; text-align: center; }
+  label { display: block; font-size: .8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+  input { width: 100%; font: inherit; font-size: 1rem; padding: 11px 12px; border: 1px solid #CDC4B8; border-radius: 9px; }
+  input:focus { outline: 2px solid rgba(135,100,64,.35); border-color: var(--brand); }
+  button { width: 100%; margin-top: 14px; padding: 12px; font: inherit; font-weight: 700; color: #fff; background: var(--brand); border: 0; border-radius: 9px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: wait; }
+  .msg { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: .92rem; display: none; }
+  .msg.err { display: block; background: #FBE6E4; color: #B3261E; }
+  .hint { font-size: .85rem; color: var(--muted); margin-top: 18px; line-height: 1.5; }
+  code { background: #F1EAE1; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <form class="card" id="f">
+    <img src="logo.png" alt="LegalTax Consultores SRL">
+    <h1>Conectar con el servidor del despacho</h1>
+    <p>Todas las computadoras del equipo se conectan al mismo servidor, donde están la base de datos y los documentos. Esto se configura una sola vez.</p>
+    <label for="server">Dirección del servidor LegalTax</label>
+    <input id="server" placeholder="https://legaltax-xxxx.onrender.com" autocomplete="off" required>
+    <button id="go" type="submit">Conectar</button>
+    <div class="msg" id="msg"></div>
+    <div class="hint">Ejemplos: <code>https://legaltax-xxxx.onrender.com</code> (servidor en internet) o <code>http://192.168.1.50:3000</code> (servidor en una computadora de la oficina). Puede cambiarlo después en <b>Archivo → Cambiar servidor</b>.</div>
+  </form>
+<script>
+  const f = document.getElementById('f'), inp = document.getElementById('server'), btn = document.getElementById('go'), msg = document.getElementById('msg');
+  const q = new URLSearchParams(location.search).get('server');
+  window.legaltaxDesktop.getServer().then(s => { inp.value = q || s || ''; inp.focus(); });
+  f.addEventListener('submit', async e => {
+    e.preventDefault(); msg.className = 'msg'; btn.disabled = true; btn.textContent = 'Comprobando…';
+    let url = inp.value.trim(); if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
+    const r = await window.legaltaxDesktop.testServer(url);
+    if (r.ok) { btn.textContent = 'Conectando…'; await window.legaltaxDesktop.saveServer(url); return; }
+    msg.textContent = r.error; msg.className = 'msg err'; btn.disabled = false; btn.textContent = 'Conectar';
+  });
+</script>
+</body>
+</html>

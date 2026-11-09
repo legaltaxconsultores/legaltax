@@ -118,6 +118,36 @@ Procedimiento recomendado:
 
 La restauración reemplaza la base y los archivos. Los archivos anteriores se guardan en `storage/files.prev`.
 
+## Aplicación de escritorio (Windows)
+
+El sistema se usa **desde computadoras**. Cada persona del equipo instala la aplicación **LegalTax Consultores** (carpeta `desktop/`, hecha con Electron). Todas las instalaciones se conectan al **mismo servidor central**, así que comparten la base de datos y los documentos:
+
+```
+ Computadora 1 ─┐
+ Computadora 2 ─┼──► Servidor LegalTax ──► PostgreSQL + documentos
+ Computadora 3 ─┘    (Render en internet, o una PC de la oficina)
+```
+
+- Lo que sube o registra una persona lo ven las demás. Las pantallas se actualizan solas cada 15 segundos cuando alguien hace un cambio.
+- La primera vez, la aplicación pide la **dirección del servidor**. Se puede cambiar en *Archivo → Cambiar servidor*.
+- Recuerda el servidor y la sesión, y abre en su propia ventana con menú en español.
+- Las descargas se guardan en `Descargas\LegalTax`, con aviso al terminar (clic para abrir).
+- Los enlaces de WhatsApp y correo se abren en los programas del sistema.
+
+**Instalador:** `LegalTax-Escritorio-Setup-1.0.0.exe`, en la sección *Releases* del repositorio en GitHub. Al no estar firmado digitalmente, Windows puede mostrar "Windows protegió su PC": pulse *Más información → Ejecutar de todas formas*.
+
+**Generar el instalador de nuevo:**
+
+```bash
+cd desktop
+npm install
+npm run build:win
+```
+
+En Linux, este paso requiere Wine.
+
+**Servidor en una computadora de la oficina (alternativa a Render):** instale Node.js 20+ y PostgreSQL en una PC que permanezca encendida. Luego ejecute `npm install`, `node src/seed.js` y `npm start` (con `NODE_ENV=production` y `ADMIN_PASSWORD`). Las demás computadoras se conectan a `http://IP-de-esa-PC:3000`. Este servidor solo es accesible dentro de la red de la oficina.
+
 ## Usuarios de la versión de prueba
 
 Todos usan la contraseña **`LegalTax2026!`**

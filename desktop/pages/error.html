@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>LegalTax — Sin conexión</title>
+<style>
+  body { margin: 0; font-family: "Segoe UI", -apple-system, Roboto, Arial, sans-serif; background: #F6F5F3; color: #2B2520; display: grid; place-items: center; min-height: 100vh; }
+  .card { background: #fff; border: 1px solid #E3DED7; border-radius: 14px; padding: 32px 36px; width: min(520px, 92vw); text-align: center; }
+  img { height: 96px; }
+  h1 { font-size: 1.2rem; color: #6E5034; }
+  p { color: #6F665D; line-height: 1.5; }
+  button { font: inherit; font-weight: 700; padding: 11px 18px; border-radius: 9px; cursor: pointer; margin: 4px; }
+  .p { background: #876440; color: #fff; border: 0; } .s { background: #fff; color: #6E5034; border: 1px solid #E3DED7; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <img src="logo.png" alt="LegalTax Consultores SRL">
+    <h1>No se pudo conectar con el servidor</h1>
+    <p id="d">Revise su conexión a internet o a la red de la oficina.</p>
+    <p style="font-size:.85rem">Si el servidor es la demostración gratuita de Render, puede tardar hasta un minuto en despertar.</p>
+    <button class="p" id="retry">Reintentar</button><button class="s" id="change">Cambiar servidor</button>
+  </div>
+<script>
+  const q = new URLSearchParams(location.search);
+  if (q.get('server')) document.getElementById('d').textContent = 'Servidor: ' + q.get('server') + (q.get('desc') ? ' (' + q.get('desc') + ')' : '');
+  document.getElementById('retry').onclick = () => window.legaltaxDesktop.retry();
+  document.getElementById('change').onclick = () => { location.href = 'setup.html?server=' + encodeURIComponent(q.get('server') || ''); };
+</script>
+</body>
+</html>
