@@ -372,6 +372,10 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   revoked     boolean NOT NULL DEFAULT false
 );
 
+-- ───────── Carpetas del sistema (Documentos LegalTax / Cliente / Expediente) ─────────
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS folder_name text;
+ALTER TABLE cases ADD COLUMN IF NOT EXISTS folder_name text;
+
 -- ───────── Seguridad a nivel de fila (RLS) ─────────
 -- Personal: acceso completo. Cliente: solo sus registros y solo lo publicado.
 DO $$

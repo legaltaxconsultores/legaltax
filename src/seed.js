@@ -96,7 +96,7 @@ async function main() {
       const PDFDocument = require('pdfkit');
       const buf = await new Promise(res => { const d = new PDFDocument(); const ch = []; d.on('data', x => ch.push(x)); d.on('end', () => res(Buffer.concat(ch)));
         d.fontSize(16).text('Resolución de Estimación de Oficio EST-2026-00871'); d.moveDown().fontSize(11).text('Documento ficticio de demostración — María Fernanda Peña Gómez.'); d.end(); });
-      const key = S.storeBuffer(buf, '.pdf');
+      const key = await S.saveBuffer(c, buf, 'resolucion-EST-2026-00871.pdf', { clientId: c2.id, caseId: cs.id });
       await c.query(`INSERT INTO documents (client_id, case_id, category, title, resolution_number, institution, doc_date, storage_key, filename, mime, size_bytes, visibility, uploaded_by)
         VALUES ($1,$2,'resolucion','Resolución de estimación de oficio','EST-2026-00871','DGII',current_date - 20,$3,'resolucion-EST-2026-00871.pdf','application/pdf',$4,'cliente',$5)`, [c2.id, cs.id, key, buf.length, exp]);
       await c.query(`INSERT INTO deadlines (case_id, client_id, kind, title, due_at, confirmed, confirmed_by, responsible_user_id, alert_days, created_by)
@@ -104,8 +104,36 @@ async function main() {
       await c.query("INSERT INTO users (email, name, role, client_id, password_hash) VALUES ('maria.pena@example.com','María Fernanda Peña','cliente',$1,$2) ON CONFLICT DO NOTHING", [c2.id, hash]);
     }
   });
+  await migrateFolders();
   console.log(DEMO ? `Esquema y datos de demostración listos. Contraseña de demostración: ${DEMO_PASSWORD}` : 'Esquema listo (modo producción, sin datos de prueba).');
   await pool.end();
+}
+
+/** Crea las carpetas de cada cliente/expediente y mueve los archivos antiguos (nombres aleatorios) a ellas. */
+async function migrateFolders() {
+  await withCtx(SYSTEM, async c => {
+    for (const { id } of (await c.query('SELECT id FROM clients')).rows) await S.docFolder(c, { clientId: id });
+    for (const r of (await c.query('SELECT id, client_id FROM cases')).rows) await S.docFolder(c, { clientId: r.client_id, caseId: r.id });
+    let moved = 0;
+    const docs = (await c.query(`SELECT d.*, t.name AS tname FROM documents d LEFT JOIN doc_types t ON t.id = d.doc_type_id WHERE d.storage_key NOT LIKE $1`, [S.DOCROOT_NAME + '/%'])).rows;
+    for (const d of docs) {
+      const src = S.filePath(d.storage_key); if (!fs.existsSync(src)) continue;
+      const target = d.category === 'voucher' ? { clientId: d.client_id, sub: 'pagos', label: 'Voucher' } : { clientId: d.client_id, caseId: d.case_id, label: d.tname || null };
+      const key = await S.saveUpload(c, src, d.filename, target);
+      await c.query('UPDATE documents SET storage_key = $2 WHERE id = $1', [d.id, key]); moved++;
+    }
+    const gds = (await c.query(`SELECT * FROM generated_docs WHERE storage_key NOT LIKE $1 OR (void_storage_key IS NOT NULL AND void_storage_key NOT LIKE $1)`, [S.DOCROOT_NAME + '/%'])).rows;
+    for (const g of gds) {
+      const t = { clientId: g.client_id, caseId: g.case_id, sub: 'emitidos' }; const label = S.LABELS[g.doc_type] || g.doc_type; const v = g.version > 1 ? ' v' + g.version : '';
+      for (const [col, suffix] of [['storage_key', ''], ['void_storage_key', ' - ANULADO']]) {
+        if (!g[col] || g[col].startsWith(S.DOCROOT_NAME + '/')) continue;
+        const src = S.filePath(g[col]); if (!fs.existsSync(src)) continue;
+        const key = await S.saveBuffer(c, fs.readFileSync(src), `${g.number}${v} - ${label}${suffix}.pdf`, t);
+        fs.unlinkSync(src); await c.query(`UPDATE generated_docs SET ${col} = $2 WHERE id = $1`, [g.id, key]); moved++;
+      }
+    }
+    if (moved) console.log(`Carpetas: ${moved} archivo(s) movido(s) a "${S.DOCROOT_NAME}".`);
+  });
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

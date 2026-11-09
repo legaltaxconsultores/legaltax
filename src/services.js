@@ -16,7 +16,71 @@ const EVENT_KIND = { actuacion: 'Actuación', deposito: 'Depósito', notificacio
 const METHOD = { transferencia: 'Transferencia', deposito: 'Depósito bancario', efectivo: 'Efectivo', cheque: 'Cheque', tarjeta: 'Tarjeta' };
 const round2 = n => Math.round(Number(n) * 100) / 100;
 
-// ───── almacenamiento privado
+// ───── almacenamiento privado, organizado en carpetas legibles:
+//   Documentos LegalTax/<Cliente (RNC)>/<EXP-… - asunto>/archivo
+//                                      /Documentos generales/ · /PDF emitidos/ · /Pagos y vouchers/
+const DOCROOT_NAME = 'Documentos LegalTax';
+const DOCROOT = path.join(STORAGE, DOCROOT_NAME);
+fs.mkdirSync(DOCROOT, { recursive: true });
+const SUB = { general: 'Documentos generales', emitidos: 'PDF emitidos', pagos: 'Pagos y vouchers' };
+const safeName = (s, max = 90) => String(s || '').normalize('NFC').replace(/[\\/:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max).replace(/[. ]+$/, '') || 'Sin nombre';
+const stamp = () => todayISO();
+
+async function clientFolder(c, clientId) {
+  const r = (await c.query('SELECT id, name, id_number, folder_name FROM clients WHERE id = $1', [clientId])).rows[0];
+  if (!r) throw httpError(404, 'Cliente no encontrado');
+  if (r.folder_name) return r.folder_name;
+  const name = safeName(`${r.name} (${r.id_number})`);
+  await c.query('UPDATE clients SET folder_name = $2 WHERE id = $1', [clientId, name]);
+  return name;
+}
+async function caseFolder(c, caseId) {
+  const r = (await c.query('SELECT id, code, title, folder_name FROM cases WHERE id = $1', [caseId])).rows[0];
+  if (!r) throw httpError(404, 'Expediente no encontrado');
+  if (r.folder_name) return r.folder_name;
+  const name = safeName(`${r.code} - ${r.title}`, 70);
+  await c.query('UPDATE cases SET folder_name = $2 WHERE id = $1', [caseId, name]);
+  return name;
+}
+/** Carpeta relativa (dentro de STORAGE) para un cliente / expediente / subcarpeta; la crea si no existe. */
+async function docFolder(c, { clientId, caseId, sub }) {
+  const parts = [DOCROOT_NAME, await clientFolder(c, clientId)];
+  if (caseId) parts.push(await caseFolder(c, caseId));
+  if (sub) parts.push(SUB[sub] || safeName(sub));
+  else if (!caseId) parts.push(SUB.general);
+  const rel = parts.join('/');
+  fs.mkdirSync(path.join(STORAGE, rel), { recursive: true });
+  return rel;
+}
+function uniqueName(relDir, fileName) {
+  const ext = path.extname(fileName); const base = path.basename(fileName, ext);
+  let name = fileName; let n = 2;
+  while (fs.existsSync(path.join(STORAGE, relDir, name))) name = `${base} (${n++})${ext}`;
+  return relDir + '/' + name;
+}
+/** Guarda un archivo subido en la carpeta del cliente/expediente con un nombre legible. */
+async function saveUpload(c, tmpPath, originalName, target) {
+  const rel = await docFolder(c, target);
+  const ext = path.extname(originalName || '').toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 8);
+  const base = safeName(path.basename(originalName || 'archivo', path.extname(originalName || '')), 70);
+  const label = target.label ? safeName(target.label, 50) + ' - ' : '';
+  const key = uniqueName(rel, `${stamp()} ${label}${base}${ext}`);
+  fs.renameSync(tmpPath, path.join(STORAGE, key));
+  return key;
+}
+async function saveBuffer(c, buf, fileName, target) {
+  const rel = await docFolder(c, target);
+  const key = uniqueName(rel, safeName(fileName, 120));
+  fs.writeFileSync(path.join(STORAGE, key), buf);
+  return key;
+}
+function saveSystemFile(tmpPath, originalName) {
+  const dir = path.join(STORAGE, 'Sistema'); fs.mkdirSync(dir, { recursive: true });
+  const key = uniqueName('Sistema', safeName(originalName || 'archivo'));
+  fs.renameSync(tmpPath, path.join(STORAGE, key));
+  return key;
+}
+
 function storeBuffer(buf, ext) {
   const y = new Date().getFullYear().toString();
   const dir = path.join(FILES, y); fs.mkdirSync(dir, { recursive: true });
@@ -33,8 +97,9 @@ function storeTmp(tmpPath, originalName) {
   return key;
 }
 const filePath = key => {
-  const p = path.join(FILES, key);
-  if (!p.startsWith(FILES)) throw new Error('ruta inválida');
+  const modern = key.startsWith(DOCROOT_NAME + '/') || key.startsWith('Sistema/');
+  const p = modern ? path.join(STORAGE, key) : path.join(FILES, key);
+  if (!p.startsWith(modern ? STORAGE : FILES)) throw new Error('ruta inválida');
   return p;
 };
 
@@ -261,7 +326,7 @@ async function issueDocument(c, docType, params, user, { share = false, parent =
   }
   b.data.number = number; b.data.version = version;
   const pdf = await render(docType, b.data, await getSettings(c), await templateFor(c, docType));
-  const key = storeBuffer(pdf, '.pdf');
+  const key = await saveBuffer(c, pdf, `${number}${version > 1 ? ' v' + version : ''} - ${LABELS[docType] || docType}.pdf`, { clientId: b.client_id, caseId: b.case_id, sub: 'emitidos' });
   const { rows } = await c.query(
     `INSERT INTO generated_docs (doc_type, number, version, parent_id, client_id, case_id, quote_id, payment_id, title, data, storage_key, shared, created_by)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
@@ -281,12 +346,12 @@ async function voidDocument(c, gd, reason, user, ip) {
   const settings = await getSettings(c);
   const at = new Date().toISOString();
   const pdf = await render(gd.doc_type, gd.data, settings, await templateFor(c, gd.doc_type), { voided: { reason, at } });
-  const key = storeBuffer(pdf, '.pdf');
+  const key = await saveBuffer(c, pdf, `${gd.number}${gd.version > 1 ? ' v' + gd.version : ''} - ANULADO.pdf`, { clientId: gd.client_id, caseId: gd.case_id, sub: 'emitidos' });
   await c.query("UPDATE generated_docs SET status = 'anulado', void_reason = $2, voided_by = $3, voided_at = $4, void_storage_key = $5 WHERE id = $1", [gd.id, reason, user.id, at, key]);
   await audit(c, user, 'anular', 'documento_pdf', gd.id, gd.client_id, { number: gd.number, reason }, ip);
 }
 
 module.exports = {
-  STORAGE, FILES, BRAND_MARK, BRAND_LOGO, CASE_STATUS, EVENT_KIND, METHOD, LABELS, round2, storeBuffer, storeTmp, filePath, audit, nextNumber, getSettings,
+  STORAGE, FILES, DOCROOT, DOCROOT_NAME, SUB, safeName, clientFolder, caseFolder, docFolder, saveUpload, saveBuffer, saveSystemFile, BRAND_MARK, BRAND_LOGO, CASE_STATUS, EVENT_KIND, METHOD, LABELS, round2, storeBuffer, storeTmp, filePath, audit, nextNumber, getSettings,
   account, quoteBalance, invoiceStatus, computeQuote, buildData, renderPreview, issueDocument, issueQuoteVersion, voidDocument, httpError, todayISO,
 };

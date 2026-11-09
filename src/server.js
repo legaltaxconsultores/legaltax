@@ -251,6 +251,7 @@ app.post('/api/clients', auth('admin', 'expedientes'), wrap(async (req, res) => 
   const row = await db(req, async c => {
     const keys = Object.keys(f);
     const r = (await c.query(`INSERT INTO clients (${keys.join(',')}) VALUES (${keys.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING *`, keys.map(k => f[k]))).rows[0];
+    await S.docFolder(c, { clientId: r.id });
     await A(c, req, 'crear', 'cliente', r.id, r.id, { name: r.name, id_number: r.id_number });
     return r;
   });
@@ -303,6 +304,7 @@ app.post('/api/cases', auth('admin', 'expedientes'), wrap(async (req, res) => {
     const keys = Object.keys(f);
     const r = (await c.query(`INSERT INTO cases (${keys.join(',')}) VALUES (${keys.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING *`, keys.map(k => f[k]))).rows[0];
     await c.query("INSERT INTO case_events (case_id, client_id, kind, title, visibility, created_by) VALUES ($1,$2,'actuacion','Apertura del expediente','cliente',$3)", [r.id, r.client_id, req.user.id]);
+    await S.docFolder(c, { clientId: r.client_id, caseId: r.id });
     await A(c, req, 'crear', 'expediente', r.id, r.client_id, { code: r.code });
     return r;
   });
@@ -316,7 +318,7 @@ app.patch('/api/cases/:id', auth('admin', 'expedientes'), wrap(async (req, res) 
 app.get('/api/cases/:id', auth(...STAFF), wrap(async (req, res) => {
   const id = int(req.params.id);
   res.json(await db(req, async c => {
-    const cs = (await c.query(`SELECT cs.*, cl.name AS client_name, cl.id_number AS client_id_number, u.name AS responsible_name FROM cases cs
+    const cs = (await c.query(`SELECT cs.*, cl.name AS client_name, cl.id_number AS client_id_number, cl.folder_name AS client_folder, u.name AS responsible_name FROM cases cs
       JOIN clients cl ON cl.id = cs.client_id LEFT JOIN users u ON u.id = cs.responsible_user_id WHERE cs.id = $1`, [id])).rows[0];
     need(cs, 'Expediente no encontrado', 404);
     const q = async sql => (await c.query(sql, [id])).rows;
@@ -391,7 +393,7 @@ app.post('/api/documents', auth(...STAFF), upload.single('file'), wrap(async (re
       const caseId = int(b.case_id);
       if (caseId) clientId = (await c.query('SELECT client_id FROM cases WHERE id = $1', [caseId])).rows[0]?.client_id;
       need(clientId, 'Indique el cliente o expediente');
-      const key = S.storeTmp(req.file.path, req.file.originalname);
+      const key = await S.saveUpload(c, req.file.path, req.file.originalname, { clientId, caseId, label: { resolucion: 'Resolución', acuse: 'Acuse', constancia_deposito: 'Constancia de depósito', notificacion: 'Notificación', contrato: 'Contrato', identificacion: 'Identificación', estado_financiero: 'Estado financiero', declaracion: 'Declaración', correspondencia: 'Correspondencia' }[b.category] || null });
       const r = (await c.query(`INSERT INTO documents (client_id, case_id, deadline_id, request_id, category, title, resolution_number, institution, doc_date, storage_key, filename, mime, size_bytes, visibility, uploaded_by)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
       [clientId, caseId, int(b.deadline_id), int(b.request_id), b.category || 'otro', str(b.title) || req.file.originalname, str(b.resolution_number), str(b.institution), str(b.doc_date),
@@ -549,7 +551,7 @@ async function insertPayment(c, req, b, file, clientIdForce) {
   need(['transferencia', 'deposito', 'efectivo', 'cheque', 'tarjeta'].includes(b.method), 'Seleccione el medio de pago');
   let docId = null;
   if (file) {
-    const key = S.storeTmp(file.path, file.originalname);
+    const key = await S.saveUpload(c, file.path, file.originalname, { clientId: q.client_id, sub: 'pagos', label: `Voucher ${q.number}` });
     docId = (await c.query(`INSERT INTO documents (client_id, case_id, category, title, storage_key, filename, mime, size_bytes, visibility, uploaded_by, uploaded_by_client)
       VALUES ($1,$2,'voucher',$3,$4,$5,$6,$7,'cliente',$8,$9) RETURNING id`,
     [q.client_id, q.case_id, `Voucher ${q.number} — ${money(amount)}`, key, file.originalname, file.mimetype, file.size, req.user.id, req.user.role === 'cliente'])).rows[0].id;
@@ -888,7 +890,7 @@ app.put('/api/settings/firm', auth('admin'), wrap(async (req, res) => {
 }));
 app.post('/api/settings/logo', auth('admin'), upload.single('file'), wrap(async (req, res) => {
   need(req.file && ['image/png', 'image/jpeg'].includes(req.file.mimetype), 'El logo debe ser PNG o JPG');
-  const key = S.storeTmp(req.file.path, req.file.originalname);
+  const key = S.saveSystemFile(req.file.path, 'logo' + path.extname(req.file.originalname || '.png'));
   await db(req, async c => {
     await c.query("UPDATE settings SET value = value || $1::jsonb WHERE key = 'firm'", [JSON.stringify({ logo_key: key, logo_mime: req.file.mimetype })]);
     await A(c, req, 'cambiar_logo', 'membrete', 'firm', null, null);
@@ -982,7 +984,7 @@ app.post('/api/portal/requests/:id/respond', auth('cliente'), upload.single('fil
     res.json(await db(req, async c => {
       const r = (await c.query('SELECT * FROM doc_requests WHERE id = $1', [int(req.params.id)])).rows[0];
       need(r, 'Solicitud no encontrada', 404); need(r.status !== 'recibida', 'Esta solicitud ya fue recibida', 409);
-      const key = S.storeTmp(req.file.path, req.file.originalname);
+      const key = await S.saveUpload(c, req.file.path, req.file.originalname, { clientId: r.client_id, caseId: r.case_id, label: 'Enviado por el cliente' });
       await c.query(`INSERT INTO documents (client_id, case_id, request_id, category, title, storage_key, filename, mime, size_bytes, visibility, uploaded_by, uploaded_by_client)
         VALUES ($1,$2,$3,'otro',$4,$5,$6,$7,$8,'cliente',$9,true)`, [r.client_id, r.case_id, r.id, r.title, key, req.file.originalname, req.file.mimetype, req.file.size, req.user.id]);
       await c.query("UPDATE doc_requests SET status = 'pendiente', client_note = $2, updated_at = now() WHERE id = $1", [r.id, str(req.body.note)]);
@@ -1147,7 +1149,8 @@ function imagesToPdf(files) {
   });
 }
 const cleanTmp = files => files.forEach(f => { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); });
-app.post('/api/cases/:id/scans', auth('admin', 'expedientes', 'cobros'), uploadMany.array('files', 40), wrap(async (req, res) => {
+/** Subida de documentos (uno o varios, con su tipo) a la carpeta de un expediente o a "Documentos generales" del cliente. */
+async function handleDocsUpload(req, res, getTarget) {
   const files = req.files || [];
   try {
     need(files.length, 'Seleccione al menos un archivo');
@@ -1155,36 +1158,127 @@ app.post('/api/cases/:id/scans', auth('admin', 'expedientes', 'cobros'), uploadM
     const merge = req.body.merge === '1' && files.length > 1;
     if (merge) need(files.every(f => ['image/jpeg', 'image/png'].includes(f.mimetype)), 'Para unir en un solo PDF, todas las páginas deben ser imágenes JPG o PNG');
     const out = await db(req, async c => {
-      const cs = (await c.query('SELECT id, client_id, code FROM cases WHERE id = $1', [int(req.params.id)])).rows[0]; need(cs, 'Expediente no encontrado', 404);
+      const target = await getTarget(c); // { clientId, caseId, code }
       const types = Object.fromEntries((await c.query('SELECT * FROM doc_types')).rows.map(t => [t.id, t]));
       const items = merge ? [{ meta: meta[0] || {}, files }] : files.map((f, i) => ({ meta: meta[i] || {}, files: [f] }));
       const created = [];
       for (const it of items) {
         const t = types[int(it.meta.doc_type_id)]; need(t, `Seleccione el tipo de documento${merge ? '' : ' de ' + it.files[0].originalname}`);
+        const title = str(it.meta.title) || t.name;
         let key, filename, mime, size, pages = null;
         if (merge) {
-          const buf = await imagesToPdf(it.files); key = S.storeBuffer(buf, '.pdf'); size = buf.length; mime = 'application/pdf'; pages = it.files.length;
-          filename = `${(str(it.meta.title) || t.name).replace(/[\\/:*?"<>|]/g, '').trim() || 'documento'}.pdf`;
+          const buf = await imagesToPdf(it.files); size = buf.length; mime = 'application/pdf'; pages = it.files.length;
+          filename = `${S.safeName(title, 80)}.pdf`;
+          key = await S.saveBuffer(c, buf, `${S.todayISO()} ${S.safeName(t.name, 50)} - ${S.safeName(title, 70)}.pdf`, target);
         } else {
-          const f = it.files[0]; key = S.storeTmp(f.path, f.originalname); filename = f.originalname; mime = f.mimetype; size = f.size;
+          const f = it.files[0]; filename = f.originalname; mime = f.mimetype; size = f.size;
+          key = await S.saveUpload(c, f.path, f.originalname, { ...target, label: t.name });
           if (mime === 'application/pdf') { try { pages = (fs.readFileSync(S.filePath(key), 'latin1').match(/\/Type\s*\/Page[^s]/g) || []).length || null; } catch (_) { /* sin conteo */ } }
           else if (mime.startsWith('image/')) pages = 1;
         }
         const d = (await c.query(`INSERT INTO documents (client_id, case_id, category, doc_type_id, scanned, pages, notes, title, resolution_number, institution, doc_date, storage_key, filename, mime, size_bytes, visibility, uploaded_by)
           VALUES ($1,$2,$3,$4,true,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id, title, visibility`,
-        [cs.client_id, cs.id, t.category, t.id, pages, str(it.meta.notes), str(it.meta.title) || t.name, str(it.meta.number), str(it.meta.institution), str(it.meta.doc_date),
+        [target.clientId, target.caseId || null, t.category, t.id, pages, str(it.meta.notes), title, str(it.meta.number), str(it.meta.institution), str(it.meta.doc_date),
           key, filename, mime, size, it.meta.visibility === 'cliente' ? 'cliente' : 'privado', req.user.id])).rows[0];
         created.push({ ...d, type: t.name });
       }
-      const summary = created.map(x => `${x.type}: ${x.title}`).join('\n');
-      const allPublic = created.every(x => x.visibility === 'cliente');
-      await c.query(`INSERT INTO case_events (case_id, client_id, kind, title, description, visibility, document_id, created_by) VALUES ($1,$2,'documento',$3,$4,$5,$6,$7)`,
-        [cs.id, cs.client_id, `${created.length} documento(s) escaneado(s) cargado(s)`, summary, allPublic ? 'cliente' : 'interna', created.length === 1 ? created[0].id : null, req.user.id]);
-      await A(c, req, 'subir_escaneados', 'expediente', cs.id, cs.client_id, { documentos: created.map(x => ({ id: x.id, tipo: x.type })), unidos: merge });
+      if (target.caseId) {
+        const summary = created.map(x => `${x.type}: ${x.title}`).join('\n');
+        const allPublic = created.every(x => x.visibility === 'cliente');
+        await c.query(`INSERT INTO case_events (case_id, client_id, kind, title, description, visibility, document_id, created_by) VALUES ($1,$2,'documento',$3,$4,$5,$6,$7)`,
+          [target.caseId, target.clientId, `${created.length} documento(s) cargado(s)`, summary, allPublic ? 'cliente' : 'interna', created.length === 1 ? created[0].id : null, req.user.id]);
+      }
+      await A(c, req, 'subir_documentos', target.caseId ? 'expediente' : 'cliente', target.caseId || target.clientId, target.clientId, { documentos: created.map(x => ({ id: x.id, tipo: x.type })), unidos: merge });
       return { created };
     });
     res.json(out);
   } finally { cleanTmp(files); }
+}
+const UPLOADERS = ['admin', 'expedientes', 'cobros'];
+app.post('/api/cases/:id/scans', auth(...UPLOADERS), uploadMany.array('files', 40), wrap((req, res) => handleDocsUpload(req, res, async c => {
+  const cs = (await c.query('SELECT id, client_id FROM cases WHERE id = $1', [int(req.params.id)])).rows[0]; need(cs, 'Expediente no encontrado', 404);
+  return { clientId: cs.client_id, caseId: cs.id };
+})));
+app.post('/api/folders/:clientId/upload', auth(...UPLOADERS), uploadMany.array('files', 40), wrap((req, res) => handleDocsUpload(req, res, async c => {
+  const clientId = int(req.params.clientId); const caseId = int(req.body.case_id);
+  need((await c.query('SELECT 1 FROM clients WHERE id = $1', [clientId])).rowCount, 'Cliente no encontrado', 404);
+  if (caseId) need((await c.query('SELECT 1 FROM cases WHERE id = $1 AND client_id = $2', [caseId, clientId])).rowCount, 'El expediente no pertenece al cliente');
+  return { clientId, caseId };
+})));
+
+// ───────── carpetas del sistema: Documentos LegalTax / Cliente / Expediente
+const DOC_COLS = `d.id, d.title, d.filename, d.mime, d.size_bytes, d.pages, d.category, d.doc_type_id, t.name AS doc_type_name, d.resolution_number, d.institution, d.doc_date,
+  d.visibility, d.uploaded_by_client, d.notes, d.case_id, d.created_at, d.storage_key, u.name AS uploaded_by_name`;
+app.get('/api/folders', auth(...STAFF), wrap(async (req, res) => {
+  res.json(await db(req, async c => (await c.query(`SELECT cl.id, cl.name, cl.id_type, cl.id_number, cl.kind, cl.folder_name,
+      (SELECT count(*)::int FROM cases WHERE client_id = cl.id) AS cases,
+      (SELECT count(*)::int FROM documents WHERE client_id = cl.id) AS documents,
+      (SELECT count(*)::int FROM generated_docs WHERE client_id = cl.id AND status <> 'reemplazado') AS emitidos,
+      greatest((SELECT max(created_at) FROM documents WHERE client_id = cl.id), (SELECT max(created_at) FROM generated_docs WHERE client_id = cl.id), cl.created_at) AS updated_at
+    FROM clients cl ORDER BY cl.name`)).rows));
+}));
+async function folderContents(c, clientId, f) {
+  const client = (await c.query('SELECT id, name, id_type, id_number, email, phone, folder_name FROM clients WHERE id = $1', [clientId])).rows[0];
+  need(client, 'Cliente no encontrado', 404);
+  if (!client.folder_name) client.folder_name = await S.clientFolder(c, clientId);
+  const cases = (await c.query(`SELECT cs.id, cs.code, cs.title, cs.status, cs.folder_name,
+      (SELECT count(*)::int FROM documents d WHERE d.case_id = cs.id AND d.category <> 'voucher') AS documents,
+      (SELECT count(*)::int FROM generated_docs g WHERE g.case_id = cs.id AND g.status <> 'reemplazado') AS emitidos
+    FROM cases cs WHERE cs.client_id = $1 ORDER BY cs.opened_on DESC, cs.id DESC`, [clientId])).rows;
+  for (const cs of cases) if (!cs.folder_name) cs.folder_name = await S.caseFolder(c, cs.id);
+  const counts = (await c.query(`SELECT
+      (SELECT count(*)::int FROM documents WHERE client_id = $1 AND case_id IS NULL AND category <> 'voucher') AS general,
+      (SELECT count(*)::int FROM documents WHERE client_id = $1 AND category = 'voucher') AS pagos,
+      (SELECT count(*)::int FROM generated_docs WHERE client_id = $1 AND case_id IS NULL AND status <> 'reemplazado') AS emitidos`, [clientId])).rows[0];
+  const out = { root: S.DOCROOT_NAME, client, cases, counts };
+  if (!f) return out;
+  const docs = q => c.query(`SELECT ${DOC_COLS} FROM documents d LEFT JOIN doc_types t ON t.id = d.doc_type_id LEFT JOIN users u ON u.id = d.uploaded_by WHERE d.client_id = $1 AND ${q} ORDER BY d.created_at DESC`, [clientId]).then(r => r.rows);
+  const gds = q => c.query(`SELECT g.id, g.doc_type, g.number, g.version, g.title, g.status, g.shared, g.created_at, u.name AS author FROM generated_docs g LEFT JOIN users u ON u.id = g.created_by
+    WHERE g.client_id = $1 AND g.status <> 'reemplazado' AND ${q} ORDER BY g.created_at DESC`, [clientId]).then(r => r.rows);
+  const m = /^case-(\d+)$/.exec(f);
+  if (m) {
+    const cs = cases.find(x => x.id === Number(m[1])); need(cs, 'Carpeta no encontrada', 404);
+    return { ...out, folder: { key: f, name: cs.folder_name, case: cs, canUpload: true, documents: await docs(`d.case_id = ${cs.id} AND d.category <> 'voucher'`), gendocs: await gds(`g.case_id = ${cs.id}`) } };
+  }
+  if (f === 'general') return { ...out, folder: { key: f, name: S.SUB.general, canUpload: true, documents: await docs(`d.case_id IS NULL AND d.category <> 'voucher'`), gendocs: [] } };
+  if (f === 'emitidos') return { ...out, folder: { key: f, name: S.SUB.emitidos, canUpload: false, documents: [], gendocs: await gds('g.case_id IS NULL') } };
+  if (f === 'pagos') return { ...out, folder: { key: f, name: S.SUB.pagos, canUpload: false, documents: await docs(`d.category = 'voucher'`), gendocs: [] } };
+  throw S.httpError(404, 'Carpeta no encontrada');
+}
+app.get('/api/folders/:clientId', auth(...STAFF), wrap(async (req, res) => {
+  const r = await db(req, c => folderContents(c, int(req.params.clientId), str(req.query.f)));
+  if (r.folder) r.folder.documents.forEach(d => delete d.storage_key);
+  res.json(r);
+}));
+// Descargar una carpeta completa (cliente o expediente) en un archivo ZIP con la misma estructura
+app.get('/api/folders/:clientId/zip', auth(...STAFF), wrap(async (req, res) => {
+  const clientId = int(req.params.clientId); const only = str(req.query.f);
+  const entries = await db(req, async c => {
+    const base = await folderContents(c, clientId);
+    const keys = only ? [only] : [...base.cases.map(x => 'case-' + x.id), 'general', 'emitidos', 'pagos'];
+    const list = [];
+    for (const k of keys) {
+      const r = await folderContents(c, clientId, k);
+      const caseDir = r.folder.case ? r.folder.case.folder_name : null;
+      for (const d of r.folder.documents) list.push({ file: S.filePath(d.storage_key), name: [caseDir || r.folder.name, path.basename(d.storage_key)].join('/') });
+      for (const g of r.folder.gendocs) {
+        const full = (await c.query('SELECT storage_key, void_storage_key, status FROM generated_docs WHERE id = $1', [g.id])).rows[0];
+        const key = full.status === 'anulado' && full.void_storage_key ? full.void_storage_key : full.storage_key;
+        list.push({ file: S.filePath(key), name: [caseDir, S.SUB.emitidos, path.basename(key)].filter(Boolean).join('/') });
+      }
+    }
+    await A(c, req, 'descargar_carpeta', 'cliente', clientId, clientId, { carpeta: only || 'completa', archivos: list.length });
+    return { list, client: base.client };
+  });
+  const zipName = `${entries.client.folder_name}${only ? ' - ' + (only.startsWith('case-') ? 'expediente' : S.SUB[only] || only) : ''}.zip`;
+  const ascii = zipName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(zipName)}`, 'Cache-Control': 'private, no-store' });
+  const archiver = require('archiver'); const zip = archiver('zip', { zlib: { level: 6 } });
+  zip.on('error', () => res.destroy()); zip.pipe(res);
+  const root = `${S.DOCROOT_NAME}/${entries.client.folder_name}`;
+  for (const e of entries.list) if (fs.existsSync(e.file)) zip.file(e.file, { name: `${root}/${e.name}` });
+  if (!entries.list.length) zip.append('Carpeta sin documentos.\n', { name: `${root}/LEEME.txt` });
+  await zip.finalize();
 }));
 
 // ───────── facturas

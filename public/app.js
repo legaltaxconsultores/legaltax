@@ -205,7 +205,7 @@ function shell() {
   const me = state.me; const isClient = me.role === 'cliente';
   if ($('#shell') && $('#shell').dataset.role === me.role) { markNav(); return; }
   const staffNav = [
-    ['#/', '⌂', 'Inicio'], ['#/consultas', '⌕', 'Consultas'], ['#/clientes', '◉', 'Clientes'], ['#/expedientes', '▤', 'Expedientes'],
+    ['#/', '⌂', 'Inicio'], ['#/consultas', '⌕', 'Consultas'], ['#/clientes', '◉', 'Clientes'], ['#/expedientes', '▤', 'Expedientes'], ['#/carpetas', '📁', 'Carpetas'],
     ['#/agenda', '◷', 'Agenda y vencimientos'], ['#/cotizaciones', '✎', 'Cotizaciones'], ['#/facturas', '🧾', 'Facturas'], ['#/pagos', '$', 'Vouchers y pagos'],
     ['#/solicitudes', '⇪', 'Solicitudes de documentos'], ['#/documentos', '⎙', 'Documentos PDF'],
   ];
@@ -497,7 +497,7 @@ route(/^\/clientes\/(\d+)$/, async (el, [id], q) => {
     <div class="actions" style="margin-top:12px"><button class="btn primary" data-act="invite">+ Invitar al portal</button></div></div>`;
   el.innerHTML = String(html`${head(c.name, `${L.idt[c.id_type]} ${c.id_number} · ${c.kind === 'empresa' ? 'Empresa' : 'Persona física'}`,
     html`${can('admin', 'expedientes') ? html`<button class="btn" data-act="edit">Editar</button><button class="btn" data-act="newcase">+ Expediente</button>` : ''}
-      <a class="btn" href="#/cotizaciones/nueva?client_id=${id}">+ Cotización</a><button class="btn" data-act="msg">💬 Aviso / WhatsApp</button><button class="btn gold" data-act="pdf">⎙ Generar PDF</button>`, html`<a href="#/clientes">Clientes</a> ›`)}
+      <a class="btn" href="#/cotizaciones/nueva?client_id=${id}">+ Cotización</a><a class="btn" href="#/carpetas/${id}">📁 Carpeta</a><button class="btn" data-act="msg">💬 Aviso / WhatsApp</button><button class="btn gold" data-act="pdf">⎙ Generar PDF</button>`, html`<a href="#/clientes">Clientes</a> ›`)}
     <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/clientes/${id}?tab=${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>${body}`);
   if (tab === 'expedientes') bindRows(el, d.cases, r => go('#/expedientes/' + r.id));
   if (tab === 'cotizaciones') bindRows(el, d.quotes, r => go('#/cotizaciones/' + r.id));
@@ -617,14 +617,15 @@ async function pdfForm(type, ctx) {
 // ───── documentos escaneados del expediente
 const typeOpts = (sel, blank = 'Seleccione el tipo…') => optList(state.docTypes || [], sel, blank);
 const fsize = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
-function scansView(scans, tipo, canUpload) {
+const typeLabel = x => x.doc_type_name || (x.category === 'voucher' ? 'Vouchers de pago' : L.cat[x.category]) || 'Otros';
+function scansView(scans, tipo, canUpload, opts = {}) {
   const groups = {};
-  scans.forEach(x => { const k = x.doc_type_name || 'Sin tipo'; (groups[k] = groups[k] || []).push(x); });
-  const filtered = tipo ? scans.filter(x => (x.doc_type_name || 'Sin tipo') === tipo) : scans;
-  const byType = {}; filtered.forEach(x => { const k = x.doc_type_name || 'Sin tipo'; (byType[k] = byType[k] || []).push(x); });
-  return html`${canUpload ? html`<div class="card"><h2>Subir documentos escaneados</h2>
-      <label class="drop" id="drop"><input type="file" id="scanfiles" multiple accept="application/pdf,image/jpeg,image/png,image/webp,image/heic">
-        <span class="big">⇪</span><b>Toque para escanear con la cámara o elegir archivos</b><span class="small muted">o arrástrelos aquí · PDF, JPG o PNG · hasta 40 archivos de 25 MB</span></label>
+  scans.forEach(x => { const k = typeLabel(x); (groups[k] = groups[k] || []).push(x); });
+  const filtered = tipo ? scans.filter(x => typeLabel(x) === tipo) : scans;
+  const byType = {}; filtered.forEach(x => { const k = typeLabel(x); (byType[k] = byType[k] || []).push(x); });
+  return html`${canUpload ? html`<div class="card"><h2>${opts.title || 'Cargar documentos'}</h2>${opts.where ? html`<p class="small muted" style="margin:-4px 0 10px">Se guardarán en: <span class="path">${opts.where}</span></p>` : ''}
+      <label class="drop" id="drop"><input type="file" id="scanfiles" multiple accept="application/pdf,image/jpeg,image/png,image/webp,.doc,.docx,.xls,.xlsx,.txt">
+        <span class="big">⇪</span><b>Haga clic para elegir archivos o documentos escaneados</b><span class="small muted">o arrástrelos aquí · PDF, imágenes, Word o Excel · hasta 40 archivos de 25 MB</span></label>
       <div id="scanq" class="hidden">
         <div class="row" style="margin-top:12px"><label class="f">Aplicar a todos: tipo de documento<select id="alltype">${typeOpts('', '—')}</select></label>
           <label class="f">Aplicar a todos: visibilidad<select id="allvis"><option value="">—</option><option value="privado">Privado (solo equipo)</option><option value="cliente">Compartir con el cliente</option></select></label></div>
@@ -635,15 +636,15 @@ function scansView(scans, tipo, canUpload) {
     <div class="chips" style="margin-bottom:12px"><a class="chip" href="${location.hash.replace(/&tipo=[^&]*/, '')}" style="${tipo ? '' : 'background:var(--navy);color:#fff'}">Todos (${scans.length})</a>
       ${Object.entries(groups).sort().map(([k, v]) => html`<a class="chip" href="${location.hash.replace(/&tipo=[^&]*/, '') + '&tipo=' + encodeURIComponent(k)}" style="${tipo === k ? 'background:var(--navy);color:#fff' : ''}">${k} (${v.length})</a>`)}</div>
     ${scans.length ? Object.entries(byType).sort().map(([k, v]) => html`<div class="card flush"><h2>📁 ${k} <span class="b">${v.length}</span></h2>${table([
-      { h: 'Documento', v: r => html`<b>${r.title}</b><div class="small muted">${r.filename} · ${fsize(r.size_bytes)}${r.pages ? ` · ${r.pages} pág.` : ''}</div>${r.notes ? html`<div class="small">${r.notes}</div>` : ''}` },
+      { h: 'Documento', v: r => html`<b>${r.title}</b>${r.uploaded_by_client ? html` <span class="b gold">Enviado por el cliente</span>` : ''}<div class="small muted">${r.filename} · ${fsize(r.size_bytes)}${r.pages ? ` · ${r.pages} pág.` : ''}</div>${r.notes ? html`<div class="small">${r.notes}</div>` : ''}` },
       { h: 'No. / Fecha', v: r => html`${r.resolution_number || '—'}<div class="small muted">${fdate(r.doc_date)}</div>` },
       { h: 'Subido', v: r => html`${fdt(r.created_at)}<div class="small muted">${r.uploaded_by_name || ''}</div>` },
       { h: 'Visibilidad', v: r => r.visibility === 'cliente' ? html`<span class="b info">Compartido</span>` : html`<span class="b">Privado</span>` },
       { h: '', v: r => html`<span class="actions"><a class="btn sm" href="/api/files/${r.id}?inline=1" target="_blank" rel="noopener">Ver</a><a class="btn sm" href="/api/files/${r.id}">Descargar</a>
         ${canUpload ? html`<button class="btn sm" data-act="editscan" data-id="${r.id}">Editar tipo / datos</button>` : ''}</span>` }], v)}</div>`)
-      : html`<div class="card empty">Aún no hay documentos escaneados en este expediente.</div>`}`;
+      : html`<div class="card empty">${opts.empty || 'Aún no hay documentos en esta carpeta.'}</div>`}`;
 }
-function bindScanUploader(el, caseId) {
+function bindScanUploader(el, uploadUrl, extra = {}) {
   const input = $('#scanfiles', el); if (!input) return;
   let queue = [];
   const isImg = f => /^image\/(jpeg|png)$/.test(f.type);
@@ -657,7 +658,8 @@ function bindScanUploader(el, caseId) {
         <div style="min-width:0;flex:1"><div class="small muted" style="margin-bottom:6px">${merge ? 'Datos del documento unido' : x.file.name} · ${fsize(merge ? queue.reduce((a, y) => a + y.file.size, 0) : x.file.size)}</div>
           <div class="row" style="margin:0"><label class="f">Tipo de documento *<select data-k="doc_type_id" required>${typeOpts(x.doc_type_id)}</select></label>
           <label class="f">Título<input data-k="title" value="${x.title || ''}" placeholder="Se usa el tipo si lo deja vacío"></label>
-          <label class="f">No. del documento<input data-k="number" value="${x.number || ''}"></label>
+          <label class="f">No. del documento / resolución<input data-k="number" value="${x.number || ''}"></label>
+          <label class="f">Institución<input data-k="institution" value="${x.institution || ''}" placeholder="DGII, TSA…"></label>
           <label class="f">Fecha del documento<input type="date" data-k="doc_date" value="${x.doc_date || ''}"></label>
           <label class="f">Visibilidad<select data-k="visibility"><option value="privado"${x.visibility !== 'cliente' ? ' selected' : ''}>Privado</option><option value="cliente"${x.visibility === 'cliente' ? ' selected' : ''}>Compartir con el cliente</option></select></label>
           <label class="f">Nota<input data-k="notes" value="${x.notes || ''}"></label></div></div>
@@ -677,11 +679,12 @@ function bindScanUploader(el, caseId) {
   $('#scanclear', el).onclick = () => { queue = []; draw(); };
   $('#scanup', el).onclick = async () => {
     const merge = $('#merge', el).checked && queue.length > 1 && queue.every(x => isImg(x.file));
-    const metas = (merge ? queue.slice(0, 1) : queue).map(({ doc_type_id, title, number, doc_date, visibility, notes }) => ({ doc_type_id, title, number, doc_date, visibility, notes }));
+    const metas = (merge ? queue.slice(0, 1) : queue).map(({ doc_type_id, title, number, institution, doc_date, visibility, notes }) => ({ doc_type_id, title, number, institution, doc_date, visibility, notes }));
     if (metas.some(m => !m.doc_type_id)) return toast('Seleccione el tipo de documento de cada archivo', true);
     const fd = new FormData(); queue.forEach(x => fd.append('files', x.file)); fd.append('meta', JSON.stringify(metas)); fd.append('merge', merge ? '1' : '0');
+    Object.entries(extra).forEach(([k, v]) => v != null && fd.append(k, v));
     const b = $('#scanup', el); b.disabled = true; b.textContent = 'Subiendo…';
-    try { const r = await api('POST', `/api/cases/${caseId}/scans`, fd); toast(`${r.created.length} documento(s) guardado(s) en el expediente`); render(); }
+    try { const r = await api('POST', uploadUrl, fd); toast(`${r.created.length} documento(s) guardado(s) en la carpeta`); render(); }
     catch (e) { fail(e); b.disabled = false; b.textContent = 'Subir documentos'; }
   };
 }
@@ -692,6 +695,49 @@ function editScanModal(doc) {
     <label class="f">Nota<input name="notes" value="${doc.notes || ''}"></label>`,
   { submit: async d => { await PATCH('/api/documents/' + doc.id, d); toast('Documento actualizado'); render(); } });
 }
+
+// ───── carpetas del sistema: Documentos LegalTax / Cliente / Expediente
+const ROOT_NAME = 'Documentos LegalTax';
+route(/^\/carpetas$/, async (el, _, q) => {
+  const rows = await GET('/api/folders');
+  const term = (q.q || '').toLowerCase();
+  const list = rows.filter(r => !term || `${r.name} ${r.id_number}`.toLowerCase().includes(term));
+  el.innerHTML = String(html`${head(ROOT_NAME, 'Carpeta del sistema. Cada cliente tiene su carpeta y, dentro, una carpeta por expediente. Todo el equipo ve los mismos documentos.')}
+    <div class="card"><form id="ff" class="filters"><label class="f">Buscar carpeta de cliente<input name="q" value="${q.q || ''}" placeholder="Nombre, cédula o RNC"></label><div><button class="btn">Buscar</button></div></form></div>
+    <p class="path" style="margin:0 0 10px">📁 ${ROOT_NAME}</p>
+    <div class="folders">${list.map(r => html`<a class="folder" href="#/carpetas/${r.id}"><span class="ic">📁</span><span class="fx"><b>${r.folder_name || r.name}</b>
+      <span class="small muted">${r.cases} expediente(s) · ${r.documents} documento(s) · ${r.emitidos} PDF</span><span class="small muted">Actualizada ${fdate(r.updated_at)}</span></span></a>`)}</div>
+    ${list.length ? '' : html`<div class="card empty">No hay carpetas que coincidan.</div>`}`);
+  $('#ff').onsubmit = e => { e.preventDefault(); go('#/carpetas?' + qs(formData(e.target))); };
+});
+route(/^\/carpetas\/(\d+)$/, async (el, [cid]) => {
+  const d = await GET('/api/folders/' + cid); const cl = d.client;
+  const card = (href, name, sub, extra = '') => html`<a class="folder" href="${href}"><span class="ic">📁</span><span class="fx"><b>${name}</b><span class="small muted">${sub}</span>${raw(String(extra))}</span></a>`;
+  el.innerHTML = String(html`${head(cl.folder_name, html`<span class="path">${ROOT_NAME} / ${cl.folder_name}</span>`,
+    html`<a class="btn" href="#/clientes/${cid}">Ver ficha del cliente</a><a class="btn gold" href="/api/folders/${cid}/zip">⤓ Descargar carpeta (ZIP)</a>`, html`<a href="#/carpetas">📁 ${ROOT_NAME}</a> ›`)}
+    <h2 style="margin-top:4px">Expedientes</h2>
+    <div class="folders">${d.cases.map(x => card(`#/carpetas/${cid}/case-${x.id}`, x.folder_name, `${x.documents} documento(s) · ${x.emitidos} PDF emitido(s)`, badge('caseStatus', x.status)))}</div>
+    ${d.cases.length ? '' : html`<div class="card empty">Este cliente aún no tiene expedientes.</div>`}
+    <h2 style="margin-top:18px">Carpetas del cliente</h2>
+    <div class="folders">
+      ${card(`#/carpetas/${cid}/general`, 'Documentos generales', `${d.counts.general} documento(s) · identificación, contratos, poderes…`)}
+      ${card(`#/carpetas/${cid}/emitidos`, 'PDF emitidos', `${d.counts.emitidos} documento(s) · cotizaciones, recibos, estados de cuenta, facturas`)}
+      ${card(`#/carpetas/${cid}/pagos`, 'Pagos y vouchers', `${d.counts.pagos} comprobante(s) de pago`)}
+    </div>`);
+});
+route(/^\/carpetas\/(\d+)\/(case-\d+|general|emitidos|pagos)$/, async (el, [cid, fk], q) => {
+  const d = await GET(`/api/folders/${cid}?f=${fk}`); const cl = d.client; const f = d.folder;
+  const canUp = f.canUpload && can('admin', 'expedientes', 'cobros');
+  el.innerHTML = String(html`${head(f.name, html`<span class="path">${ROOT_NAME} / ${cl.folder_name} / ${f.name}</span>`,
+    html`${f.case ? html`<a class="btn" href="#/expedientes/${f.case.id}">Abrir expediente</a>` : ''}<a class="btn gold" href="/api/folders/${cid}/zip?f=${fk}">⤓ Descargar esta carpeta (ZIP)</a>`,
+    html`<a href="#/carpetas">📁 ${ROOT_NAME}</a> › <a href="#/carpetas/${cid}">${cl.folder_name}</a> ›`)}
+    ${fk === 'emitidos' || fk === 'pagos' ? '' : scansView(f.documents, q.tipo, canUp, { title: 'Cargar documentos a esta carpeta', where: `${ROOT_NAME} / ${cl.folder_name} / ${f.name}` })}
+    ${fk === 'pagos' ? scansView(f.documents, q.tipo, false, { empty: 'No hay comprobantes de pago.' }) : ''}
+    ${f.gendocs.length || fk === 'emitidos' ? html`<div class="card flush"><h2>📁 PDF emitidos ${f.case ? 'del expediente' : ''} <span class="b">${f.gendocs.length}</span></h2>${gendocsTable(f.gendocs)}</div>` : ''}`);
+  bindGendocs(el);
+  if (canUp) bindScanUploader(el, `/api/folders/${cid}/upload`, { case_id: f.case ? f.case.id : null });
+  act(el, { editscan: x => editScanModal(f.documents.find(y => String(y.id) === x.id)), viewgd: x => viewPdf(gdUrl(x.id)) });
+});
 
 // ───── expedientes
 function caseModal(c = {}, edit) {
@@ -728,9 +774,10 @@ route(/^\/expedientes$/, async (el, _, q) => {
   act(el, { new: () => caseModal() });
 });
 route(/^\/expedientes\/(\d+)$/, async (el, [id], q) => {
-  const d = await GET('/api/cases/' + id); const c = d.case; const tab = q.tab || 'linea';
-  const scans = d.documents.filter(x => x.scanned);
-  const tabs = [['linea', 'Línea de tiempo'], ['escaneados', `📂 Documentos escaneados (${scans.length})`], ['archivos', `Todos los archivos (${d.documents.length})`], ['plazos', `Plazos y agenda (${d.deadlines.filter(x => x.status === 'pendiente').length})`], ['solicitudes', `Solicitudes (${d.requests.length})`], ['pdf', `PDF (${d.gendocs.length})`]];
+  const d = await GET('/api/cases/' + id); const c = d.case;
+  const tab = ['escaneados', 'archivos'].includes(q.tab) ? 'documentos' : (q.tab || 'documentos');
+  const scans = d.documents.filter(x => x.category !== 'voucher');
+  const tabs = [['documentos', `📂 Documentos (${scans.length})`], ['linea', 'Línea de tiempo'], ['plazos', `Plazos y agenda (${d.deadlines.filter(x => x.status === 'pendiente').length})`], ['solicitudes', `Solicitudes (${d.requests.length})`], ['pdf', `PDF (${d.gendocs.length})`]];
   const edit = can('admin', 'expedientes');
   let body = '';
   if (tab === 'linea') body = html`<div class="grid g2" style="grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)">
@@ -746,18 +793,12 @@ route(/^\/expedientes\/(\d+)$/, async (el, [id], q) => {
       <label class="f">Título<input name="title" required></label><label class="f" style="margin-top:8px">Detalle<textarea name="description"></textarea></label>
       <label class="f" style="margin-top:8px">Visibilidad<select name="visibility"><option value="interna">Nota interna (solo equipo)</option><option value="cliente">Publicar actualización al cliente</option></select></label>
       <button class="btn primary" style="margin-top:10px">Registrar</button></form></div>` : ''}</div></div>`;
-  if (tab === 'archivos') body = html`${edit ? html`<div class="card"><h2>Adjuntar archivo</h2><form id="upf">
-      <div class="row"><label class="f">Categoría<select name="category">${opts(L.cat, 'resolucion')}</select></label><label class="f">Título<input name="title" placeholder="Ej.: Resolución de reconsideración"></label>
-      <label class="f">No. de resolución / documento<input name="resolution_number"></label><label class="f">Institución<input name="institution" value="${c.institution || ''}"></label></div>
-      <div class="row"><label class="f">Fecha del documento<input type="date" name="doc_date"></label><label class="f">Visibilidad<select name="visibility"><option value="privado">Privado (solo equipo)</option><option value="cliente">Compartir con el cliente</option></select></label>
-      <label class="f">Archivo (PDF, imagen, Office · máx. 20 MB)<input type="file" name="file" required></label></div>
-      <button class="btn primary">Subir archivo</button></form></div>` : ''}<div class="card flush">${docsTable(d.documents, true)}</div>`;
-  if (tab === 'escaneados') body = scansView(scans, q.tipo, edit || can('cobros'));
+  if (tab === 'documentos') body = scansView(scans, q.tipo, edit || can('cobros'), { title: 'Cargar documentos al expediente', where: `Documentos LegalTax / ${c.client_folder || c.client_name} / ${c.folder_name || c.code}`, empty: 'Aún no hay documentos en este expediente. Cárguelos arriba.' });
   if (tab === 'plazos') body = html`<div class="actions" style="margin-bottom:12px"><button class="btn primary" data-act="newdl">+ Nuevo plazo / audiencia / tarea</button></div><div class="card flush">${deadlinesTable(d.deadlines)}</div>`;
   if (tab === 'solicitudes') body = html`<div class="actions" style="margin-bottom:12px"><button class="btn primary" data-act="newreq">+ Solicitar documento al cliente</button></div><div class="card flush">${table([{ h: 'Documento', v: r => html`<b>${r.title}</b><div class="small muted">${r.description || ''}</div>` }, { h: 'Entrega', v: r => fdate(r.due_date) }, { h: 'Estado', v: r => badge('req', r.status) }], d.requests, { empty: 'Sin solicitudes.' })}</div>`;
   if (tab === 'pdf') body = html`<div class="card flush">${gendocsTable(d.gendocs)}</div>`;
   el.innerHTML = String(html`${head(`${c.code} · ${c.title}`, html`<a href="#/clientes/${c.client_id}">${c.client_name}</a> · ${c.client_id_number}`,
-    html`${edit ? html`<button class="btn" data-act="edit">Editar</button>` : ''}<button class="btn gold" data-act="pdf">⎙ Generar PDF</button>`, html`<a href="#/expedientes">Expedientes</a> ›`)}
+    html`<a class="btn" href="#/carpetas/${c.client_id}/case-${c.id}">📁 Ver en Carpetas</a>${edit ? html`<button class="btn" data-act="edit">Editar</button>` : ''}<button class="btn gold" data-act="pdf">⎙ Generar PDF</button>`, html`<a href="#/expedientes">Expedientes</a> ›`)}
     <div class="card"><dl class="dl"><div><dt>Estado</dt><dd>${badge('caseStatus', c.status)}</dd></div><div><dt>Institución</dt><dd>${c.institution || '—'}</dd></div><div><dt>No. oficial</dt><dd>${c.official_number || '—'}</dd></div>
       <div><dt>Períodos fiscales</dt><dd>${c.fiscal_periods || '—'}</dd></div><div><dt>Responsable</dt><dd>${c.responsible_name || '—'}</dd></div><div><dt>Apertura</dt><dd>${fdate(c.opened_on)}</dd></div>
       <div><dt>Próxima acción</dt><dd>${c.next_action || '—'} ${c.next_action_date ? html`<span class="b gold">${fdate(c.next_action_date)}</span>` : ''}</dd></div>
@@ -765,7 +806,7 @@ route(/^\/expedientes\/(\d+)$/, async (el, [id], q) => {
       ${d.quotes.length ? html`<div><dt>Cotizaciones</dt><dd>${d.quotes.map(x => html`<a href="#/cotizaciones/${x.id}">${x.number}</a> `)}</dd></div>` : ''}</dl></div>
     <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/expedientes/${id}?tab=${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>${body}`);
   bindGendocs(el);
-  if (tab === 'escaneados') bindScanUploader(el, id);
+  if (tab === 'documentos') bindScanUploader(el, `/api/cases/${id}/scans`);
   const evf = $('#evf'); if (evf) evf.onsubmit = async e => { e.preventDefault(); try { await POST(`/api/cases/${id}/events`, formData(evf)); toast('Actuación registrada'); render(); } catch (err) { fail(err); } };
   const upf = $('#upf'); if (upf) upf.onsubmit = async e => {
     e.preventDefault(); const fd = new FormData(upf); fd.append('case_id', id);

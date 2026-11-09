@@ -86,17 +86,22 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, name + '.png
   const caseCode = (await page.locator('h1').textContent()).split(' · ')[0];
   check(/^EXP-\d{4}-\d{4}$/.test(caseCode), `Expediente abierto con código ${caseCode}`);
 
+  await page.waitForSelector('#drop'); check(true, 'Al abrir el expediente se muestra primero su espacio de Documentos');
+  await page.click('.tabs >> text=Línea de tiempo'); await page.waitForSelector('#evf');
   await page.fill('#evf input[name=title]', 'Reunión inicial con el cliente y revisión de la resolución');
   await page.selectOption('#evf select[name=visibility]', 'cliente'); await page.click('#evf button');
   await toast(page, /Actuación registrada/);
   await page.fill('#evf input[name=title]', 'Nota interna: estrategia sobre gastos no deducibles'); await page.selectOption('#evf select[name=visibility]', 'interna');
   await page.click('#evf button'); await toast(page, /Actuación registrada/);
 
-  await page.click('.tabs >> text=Archivos');
-  await page.selectOption('#upf select[name=category]', 'resolucion'); await page.fill('#upf input[name=title]', 'Resolución de ajuste ITBIS 2024');
-  await page.fill('#upf input[name=resolution_number]', 'RES-DGII-2026-01234'); await page.fill('#upf input[name=doc_date]', '2026-10-15');
-  await page.selectOption('#upf select[name=visibility]', 'cliente'); await page.setInputFiles('#upf input[name=file]', fx.res);
-  await page.click('#upf button'); await toast(page, /guardado/);
+  // espacio de documentos del expediente: la resolución con su tipo, número, institución y fecha
+  await page.click('.tabs >> text=Documentos'); await page.waitForSelector('#drop');
+  check((await page.locator('.path').first().textContent()).includes('Documentos LegalTax / Constructora Caribe Azul, SRL (1-31-45678-9) / EXP-'), 'El expediente muestra en qué carpeta del sistema se guardan sus documentos');
+  await page.setInputFiles('#scanfiles', fx.res);
+  await page.selectOption('#scanrows [data-k=doc_type_id]', { label: 'Resolución' }); await page.fill('#scanrows [data-k=title]', 'Resolución de ajuste ITBIS 2024');
+  await page.fill('#scanrows [data-k=number]', 'RES-DGII-2026-01234'); await page.fill('#scanrows [data-k=institution]', 'DGII'); await page.fill('#scanrows [data-k=doc_date]', '2026-10-15');
+  await page.selectOption('#scanrows [data-k=visibility]', 'cliente');
+  await page.click('#scanup'); await toast(page, /guardado/);
   await page.waitForSelector('text=RES-DGII-2026-01234');
   const resolutionId = await page.locator('a[href^="/api/files/"]').first().getAttribute('href').then(h => h.match(/files\/(\d+)/)[1]);
   check(true, `Resolución RES-DGII-2026-01234 adjuntada (archivo #${resolutionId})`);
@@ -106,7 +111,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, name + '.png
   await page.setInputFiles('#scanfiles', fx.scans);
   await page.check('#merge'); await page.selectOption('#scanrows [data-k=doc_type_id]', { label: 'Cédula de identidad' });
   await page.fill('#scanrows [data-k=title]', 'Cédula del representante (ambos lados)'); await page.fill('#scanrows [data-k=number]', '402-2233445-1');
-  await page.click('#scanup'); await toast(page, /1 documento\(s\) guardado/);
+  await page.click('#scanup'); await page.waitForSelector('h2:has-text("Cédula de identidad")');
   await page.setInputFiles('#scanfiles', fx.acta);
   await page.selectOption('#scanrows [data-k=doc_type_id]', { label: 'Acta constitutiva / estatutos' }); await page.selectOption('#scanrows [data-k=visibility]', 'cliente');
   await page.click('#scanup'); await toast(page, /1 documento\(s\) guardado/);
@@ -119,6 +124,26 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, name + '.png
   check(await page.locator('h2:has-text("Acta constitutiva")').count() === 0, 'Filtro por tipo de documento dentro del expediente');
   await page.goto(BASE + '/#/consultas?entity=documents&scanned=si'); await page.waitForSelector('td:has-text("Cédula de identidad")');
   check(true, 'Consultas: búsqueda de escaneados por tipo de documento');
+
+  // carpetas del sistema: Documentos LegalTax / Cliente / Expediente
+  await page.goto(BASE + '/#/carpetas'); await page.waitForSelector('.folder');
+  check(await page.locator('.folder', { hasText: 'Constructora Caribe Azul, SRL (1-31-45678-9)' }).count() === 1, 'Carpetas: la empresa tiene su carpeta dentro de “Documentos LegalTax”');
+  await shot(page, '14-carpetas');
+  await page.click('.folder:has-text("Constructora Caribe Azul")'); await page.waitForSelector('.folder:has-text("Documentos generales")');
+  check(await page.locator('.folder', { hasText: caseCode }).count() === 1, `Dentro de la carpeta del cliente está la carpeta del expediente ${caseCode}`);
+  await shot(page, '15-carpeta-cliente');
+  await page.click('.folder:has-text("Documentos generales")'); await page.waitForSelector('#drop');
+  await page.setInputFiles('#scanfiles', fx.acta);
+  await page.selectOption('#scanrows [data-k=doc_type_id]', { label: 'Certificado de RNC' }); await page.fill('#scanrows [data-k=title]', 'Certificación RNC 2026');
+  await page.click('#scanup'); await page.waitForSelector('h2:has-text("Certificado de RNC")');
+  check(true, 'Carga de un documento en “Documentos generales” del cliente (sin expediente)');
+  await page.click(`.crumbs a:has-text("Constructora Caribe Azul")`); await page.click(`.folder:has-text("${caseCode}")`);
+  await page.waitForSelector('td:has-text("Cédula del representante")');
+  check(await page.locator('td:has-text("Resolución de ajuste ITBIS 2024")').count() > 0, 'La carpeta del expediente muestra los documentos cargados desde el expediente');
+  await shot(page, '16-carpeta-expediente');
+  const zip = await page.request.get(BASE + `/api/folders/${clientId}/zip`); const zb = await zip.body();
+  fs.writeFileSync(path.join(OUT, 'carpeta-cliente.zip'), zb);
+  check(zip.ok() && zb.slice(0, 2).toString() === 'PK' && zb.includes(Buffer.from('Documentos generales/')) && zb.includes(Buffer.from(caseCode)), `La carpeta completa del cliente se descarga en ZIP con sus subcarpetas (${Math.round(zb.length / 1024)} KB)`);
   await page.fill('#gsearch input', 'RES-DGII-2026-01234'); await page.press('#gsearch input', 'Enter');
   await page.waitForSelector('h2:has-text("Archivos y resoluciones")');
   const found = await page.locator('td:has-text("RES-DGII-2026-01234")').count();
@@ -127,7 +152,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, name + '.png
   await page.fill('#gsearch input', '131456789'); await page.press('#gsearch input', 'Enter');
   await page.waitForSelector('h2:has-text("Clientes")');
   check(await page.locator('td:has-text("Constructora Caribe Azul")').count() > 0, 'El buscador encuentra la empresa por RNC sin guiones (131456789)');
-  await page.goto(BASE + `/#/expedientes/${caseId}`); await page.waitForSelector('.tl'); await shot(page, '03-expediente-linea-de-tiempo');
+  await page.goto(BASE + `/#/expedientes/${caseId}?tab=linea`); await page.waitForSelector('.tl'); await shot(page, '03-expediente-linea-de-tiempo');
 
   // invitación al portal
   await page.goto(BASE + `/#/clientes/${clientId}?tab=portal`); await page.click('text=+ Invitar al portal');

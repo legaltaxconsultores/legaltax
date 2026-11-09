@@ -182,3 +182,12 @@ label.chk input { width: auto; }
 .scanrow .thumb img { width: 100%; height: 100%; object-fit: cover; }
 @media (max-width: 920px) { .scanrow .thumb { width: 48px; height: 64px; } }
 label.f input, label.f select, label.f textarea { font-weight: 400; color: var(--ink); }
+
+/* carpetas */
+.folders { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.folder { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; color: var(--ink); box-shadow: var(--shadow); min-width: 0; }
+.folder:hover { border-color: var(--navy); text-decoration: none; background: #FDFBF8; }
+.folder .ic { font-size: 1.9rem; line-height: 1; }
+.folder .fx { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.folder .b { margin-top: 4px; align-self: flex-start; }
+.path { font-family: ui-monospace, Consolas, Menlo, monospace; font-size: .82rem; color: var(--muted); background: var(--line-2); padding: 2px 8px; border-radius: 5px; overflow-wrap: anywhere; }
