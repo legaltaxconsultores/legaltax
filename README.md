@@ -104,6 +104,41 @@ Cada expediente tiene la pestaña **📂 Documentos escaneados**:
 
 En producción hay que servir la app detrás de HTTPS (Nginx o Caddy) y cambiar las contraseñas de demostración.
 
+## Publicar en internet: servidor propio (sin Render)
+
+El sistema se instala en un servidor **Ubuntu 22.04 o 24.04** con **un solo comando**. Proveedores que aceptan **PayPal**:
+
+| Proveedor | Plan sugerido | Costo aproximado |
+|---|---|---|
+| DigitalOcean | Droplet Basic, 1 GB RAM | ~US$ 6/mes (PayPal con prepago mínimo de US$ 5) |
+| Akamai (Linode) | Nanode 1 GB | ~US$ 5/mes |
+| Hostinger | VPS KVM 1 | ~US$ 6–7/mes |
+| Vultr | Cloud Compute 1 GB | ~US$ 6/mes |
+
+Con el servidor creado, conéctese como `root` (desde la consola web del proveedor o por SSH) y ejecute:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/legaltaxconsultores/legaltax/main/scripts/instalar-servidor.sh | bash
+```
+
+El instalador pide dos datos:
+- **El dominio.** Pulse Enter para usar uno gratuito del tipo `IP.sslip.io`, o escriba el suyo.
+- **La contraseña de Administración.**
+
+Luego instala PostgreSQL, Node.js 20 y Caddy (con HTTPS automático) y crea la base de datos y la cuenta `admin`. Además:
+- deja el sistema arrancando solo;
+- activa el firewall (solo SSH, 80 y 443);
+- programa una **copia de seguridad diaria** a las 2:40 a. m. en `/var/lib/legaltax/backups` (conserva 30).
+
+Ubicaciones y comandos útiles en el servidor:
+- **Documentos:** `/var/lib/legaltax/storage/Documentos LegalTax/<Cliente>/<Expediente>/`
+- **Configuración y contraseñas internas:** `/etc/legaltax.env` (no compartir)
+- **Actualizar el sistema a la última versión de GitHub:** `legaltax-actualizar`
+- **Ver registros si algo falla:** `journalctl -u legaltax -n 50`
+- **Copia manual:** `cd /opt/legaltax && sudo -u legaltax bash -c 'set -a; . /etc/legaltax.env; set +a; bash scripts/backup.sh'`
+
+Conviene copiar periódicamente la carpeta de copias de seguridad fuera del servidor, por ejemplo con la descarga en ZIP de cada carpeta desde la aplicación.
+
 ## Copias de seguridad y restauración
 
 ```bash
@@ -125,7 +160,7 @@ El sistema se usa **desde computadoras**. Cada persona del equipo instala la apl
 ```
  Computadora 1 ─┐
  Computadora 2 ─┼──► Servidor LegalTax ──► PostgreSQL + documentos
- Computadora 3 ─┘    (Render en internet, o una PC de la oficina)
+ Computadora 3 ─┘    (servidor propio en internet, o una PC de la oficina)
 ```
 
 - Lo que sube o registra una persona lo ven las demás. Las pantallas se actualizan solas cada 15 segundos cuando alguien hace un cambio.
@@ -146,7 +181,7 @@ npm run build:win
 
 En Linux, este paso requiere Wine.
 
-**Servidor en una computadora de la oficina (alternativa a Render):** instale Node.js 20+ y PostgreSQL en una PC que permanezca encendida. Luego ejecute `npm install`, `node src/seed.js` y `npm start` (con `NODE_ENV=production` y `ADMIN_PASSWORD`). Las demás computadoras se conectan a `http://IP-de-esa-PC:3000`. Este servidor solo es accesible dentro de la red de la oficina.
+**Servidor en una computadora de la oficina:** también puede usar el instalador de abajo en una PC con Ubuntu que permanezca encendida. Las demás computadoras se conectan a la dirección que muestre el instalador. Así, el sistema solo es accesible dentro de la red de la oficina.
 
 ## Inicio de sesión y usuarios
 
@@ -164,7 +199,7 @@ En Linux, este paso requiere Wine.
 node scripts/usuarios.js config/usuarios.json
 ```
 
-En Render se ejecuta desde la pestaña **Shell** del servicio. También se pueden crear uno por uno desde *Configuración → Usuarios*. No suba `config/usuarios.json` a GitHub, porque contiene contraseñas.
+En el servidor se ejecuta así: `cd /opt/legaltax && sudo -u legaltax bash -c 'set -a; . /etc/legaltax.env; set +a; node scripts/usuarios.js config/usuarios.json'`. También se pueden crear uno por uno desde *Configuración → Usuarios*. No suba `config/usuarios.json` a GitHub, porque contiene contraseñas.
 
 ## Usuarios de la versión de prueba
 
