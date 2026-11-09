@@ -168,7 +168,7 @@ const route = (re, fn, roles) => routes.push({ re, fn, roles });
 window.addEventListener('hashchange', () => render());
 
 async function boot() {
-  try { const r = await GET('/api/me'); state.me = r.user; state.client = r.client; state.firm = r.firm || {}; } catch (_) { state.me = null; }
+  try { const r = await GET('/api/me'); state.me = r.user; state.client = r.client; state.firm = r.firm || {}; state.demo = !!r.demo; } catch (_) { state.me = null; }
   if (state.me && state.me.role !== 'cliente') {
     state.staff = await GET('/api/staff').catch(() => []);
     state.mail = await GET('/api/email/config').catch(() => ({}));
@@ -270,10 +270,10 @@ function viewLogin() {
       <label class="f">Correo electrónico<input name="email" type="email" required autocomplete="username"></label>
       <label class="f">Contraseña<input name="password" type="password" required autocomplete="current-password"></label>
       <button class="btn primary" style="width:100%;padding:11px">Entrar</button>
-      <div class="demo-users"><b>Versión de prueba</b> — contraseña de todos: <code>LegalTax2026!</code><br>
+      ${state.demo ? html`<div class="demo-users"><b>Versión de prueba</b> — contraseña de todos: <code>LegalTax2026!</code><br>
         ${[['admin@legaltax.do', 'Administración'], ['expedientes@legaltax.do', 'Expedientes'], ['cobros@legaltax.do', 'Cobros'], ['maria.pena@example.com', 'Cliente: María Peña'], ['finanzas@caribeazul.do', 'Cliente: Caribe Azul (tras el recorrido)']]
           .map(([e, l]) => html`<button type="button" class="btn link" data-email="${e}">${l}</button><br>`)}
-      </div>
+      </div>` : html`<p class="small muted" style="margin-top:14px">¿Olvidó su contraseña? Pida a Administración un nuevo enlace de acceso.</p>`}
     </form></section></div>`);
   const f = $('#lf');
   on(f, '[data-email]', 'click', (e, b) => { f.email.value = b.dataset.email; f.password.focus(); });

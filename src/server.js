@@ -91,7 +91,8 @@ app.post('/api/login', wrap(async (req, res) => {
 app.post('/api/logout', (req, res) => req.session.destroy(() => { res.clearCookie('lt.sid'); res.json({ ok: true }); }));
 app.get('/api/me', wrap(async (req, res) => {
   const u = req.session.user;
-  if (!u) return res.json({ user: null });
+  const demo = process.env.SEED_DEMO ? process.env.SEED_DEMO === '1' : process.env.NODE_ENV !== 'production';
+  if (!u) return res.json({ user: null, demo });
   const s = (await pool.query("SELECT value FROM settings WHERE key = 'firm'")).rows[0]?.value || {};
   let client = null;
   if (u.client_id) client = (await withCtx(u, c => c.query('SELECT id, name, id_number FROM clients WHERE id = $1', [u.client_id]))).rows[0];

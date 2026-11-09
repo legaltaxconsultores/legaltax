@@ -17,7 +17,11 @@ services:
         value: "1"
       - key: STORAGE_DIR
         value: /var/data/storage
-      - key: DEMO_PASSWORD   # contraseña inicial de los usuarios; cámbiela después de entrar
+      - key: NODE_ENV
+        value: production
+      - key: ADMIN_EMAIL     # cuenta de Administración que se crea al primer arranque
+        value: legaltax.consultores@gmail.com
+      - key: ADMIN_PASSWORD  # contraseña inicial de Administración (mínimo 8 caracteres)
         sync: false
       - key: PUBLIC_URL      # p. ej. https://legaltax.onrender.com/ o su dominio
         sync: false

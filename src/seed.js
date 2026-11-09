@@ -8,6 +8,10 @@ const { pool, withCtx, SYSTEM } = require('./db');
 const S = require('./services');
 
 const DEMO_PASSWORD = process.env.DEMO_PASSWORD || 'LegalTax2026!';
+// Modo demostración: usuarios y clientes ficticios. En producción (NODE_ENV=production) no se crean, salvo SEED_DEMO=1.
+const DEMO = process.env.SEED_DEMO ? process.env.SEED_DEMO === '1' : process.env.NODE_ENV !== 'production';
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'legaltax.consultores@gmail.com').toLowerCase();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 async function main() {
   if (process.argv.includes('--reset')) {
@@ -56,6 +60,16 @@ async function main() {
       ['Declaración jurada IR-1 / IR-2', 'declaracion'], ['Declaración IT-1 (ITBIS)', 'declaracion'], ['Formato 606 / 607', 'declaracion'], ['Estados financieros', 'estado_financiero'],
       ['Factura / comprobante fiscal', 'otro'], ['Estado de cuenta bancario', 'otro'], ['Recibo de pago', 'otro'], ['Correspondencia', 'correspondencia'], ['Otro', 'otro']];
     for (const [i, [n, cat]] of types.entries()) await c.query('INSERT INTO doc_types (name, category, position) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING', [n, cat, i]);
+    if (!DEMO) {
+      // Producción: solo la cuenta de Administración del despacho (la contraseña sale de ADMIN_PASSWORD).
+      const exists = (await c.query('SELECT 1 FROM users WHERE lower(email) = $1', [ADMIN_EMAIL])).rowCount;
+      if (!exists) {
+        if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 8) throw new Error('Defina ADMIN_PASSWORD (mínimo 8 caracteres) para crear la cuenta de Administración');
+        await c.query("INSERT INTO users (email, name, role, password_hash) VALUES ($1, 'Administración LegalTax', 'admin', $2)", [ADMIN_EMAIL, await bcrypt.hash(ADMIN_PASSWORD, 10)]);
+        console.log('Cuenta de Administración creada:', ADMIN_EMAIL);
+      }
+      return;
+    }
     const hash = await bcrypt.hash(DEMO_PASSWORD, 10);
     const staff = [
       ['admin@legaltax.do', 'Ana Martínez (Administración)', 'admin'],
@@ -90,7 +104,7 @@ async function main() {
       await c.query("INSERT INTO users (email, name, role, client_id, password_hash) VALUES ('maria.pena@example.com','María Fernanda Peña','cliente',$1,$2) ON CONFLICT DO NOTHING", [c2.id, hash]);
     }
   });
-  console.log('Esquema y datos iniciales listos. Contraseña de demostración:', DEMO_PASSWORD);
+  console.log(DEMO ? `Esquema y datos de demostración listos. Contraseña de demostración: ${DEMO_PASSWORD}` : 'Esquema listo (modo producción, sin datos de prueba).');
   await pool.end();
 }
 
