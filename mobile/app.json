@@ -1,24 +1,46 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "LegalTax Equipo",
+    "slug": "legaltax-equipo",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "do.legaltax.equipo",
+      "infoPlist": {
+        "NSCameraUsageDescription": "LegalTax usa la cámara para escanear documentos de los expedientes.",
+        "NSPhotoLibraryUsageDescription": "LegalTax accede a sus fotos para adjuntar documentos a los expedientes."
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "do.legaltax.equipo"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "favicon": "./assets/icon.png"
+    },
+    "splash": {
+      "image": "./assets/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "extra": {
+      "apiUrl": ""
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "LegalTax usa la cámara para escanear documentos de los expedientes.",
+          "photosPermission": "LegalTax accede a sus fotos para adjuntar documentos a los expedientes."
+        }
+      ],
+      "expo-secure-store"
+    ]
   }
 }

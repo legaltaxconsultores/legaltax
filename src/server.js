@@ -30,6 +30,20 @@ app.use(session({
   cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.COOKIE_SECURE === '1', maxAge: 1000 * 60 * 60 * 8 },
 }));
 app.use(express.static(path.join(__dirname, '..', 'public'), { index: 'index.html' }));
+// App móvil del equipo: autenticación con token "Bearer" por dispositivo (se guarda cifrado en el teléfono)
+const sha = t => crypto.createHash('sha256').update(t).digest('hex');
+app.use('/api', async (req, res, next) => {
+  const h = req.get('authorization') || '';
+  if (!h.startsWith('Bearer ')) return next();
+  try {
+    const r = await pool.query(`UPDATE api_tokens t SET last_used = now() FROM users u
+      WHERE t.token_hash = $1 AND NOT t.revoked AND t.expires_at > now() AND u.id = t.user_id AND u.active
+      RETURNING u.id, u.name, u.email, u.role, u.client_id`, [sha(h.slice(7).trim())]);
+    if (r.rows[0]) req.tokenUser = r.rows[0];
+  } catch (_) { /* token inválido: se trata como sin sesión */ }
+  next();
+});
+
 
 const ALLOWED_MIME = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel',
@@ -41,7 +55,7 @@ const upload = multer({ dest: path.join(S.STORAGE, 'tmp'), limits: { fileSize: 2
 const STAFF = ['admin', 'expedientes', 'cobros'];
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const auth = (...roles) => (req, res, next) => {
-  const u = req.session.user;
+  const u = req.session.user || req.tokenUser;
   if (!u) return res.status(401).json({ error: 'Sesión no iniciada' });
   if (roles.length && !roles.includes(u.role)) return res.status(403).json({ error: 'No tiene permiso para esta acción' });
   req.user = u; next();
@@ -88,9 +102,46 @@ app.post('/api/login', wrap(async (req, res) => {
     res.json({ user: req.session.user });
   });
 }));
+// Marcador de cambios: todas las apps consultan aquí y recargan cuando alguien modifica algo
+app.get('/api/sync', auth(), wrap(async (req, res) => {
+  const r = await db(req, c => c.query('SELECT coalesce(max(id),0)::text AS last FROM audit_log'));
+  res.json({ last: r.rows[0]?.last || '0', at: new Date().toISOString() });
+}));
+app.post('/api/mobile/login', wrap(async (req, res) => {
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const key = req.ip + '|' + email; const a = attempts.get(key) || { n: 0, t: Date.now() };
+  if (a.n >= 8 && Date.now() - a.t < 15 * 60e3) return res.status(429).json({ error: 'Demasiados intentos. Espere 15 minutos.' });
+  const u = (await pool.query('SELECT * FROM users WHERE lower(email) = $1 AND active', [email])).rows[0];
+  if (!u || !u.password_hash || !(await bcrypt.compare(String(req.body.password || ''), u.password_hash))) {
+    attempts.set(key, { n: a.n + 1, t: a.n === 0 ? Date.now() : a.t });
+    return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
+  }
+  if (u.role === 'cliente') return res.status(403).json({ error: 'La app móvil es solo para el equipo de LegalTax. Los clientes usan el portal web.' });
+  attempts.delete(key);
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query('INSERT INTO api_tokens (user_id, token_hash, device) VALUES ($1,$2,$3)', [u.id, sha(token), String(req.body.device || 'móvil').slice(0, 80)]);
+  await pool.query('UPDATE users SET last_login = now() WHERE id = $1', [u.id]);
+  const user = { id: u.id, name: u.name, email: u.email, role: u.role, client_id: null };
+  await withCtx(user, c => S.audit(c, user, 'inicio_sesion_movil', 'usuario', u.id, null, { device: req.body.device }, req.ip));
+  const firm = (await pool.query("SELECT value FROM settings WHERE key = 'firm'")).rows[0]?.value || {};
+  res.json({ token, user, firm: { name: firm.firm_name } });
+}));
+app.post('/api/mobile/logout', wrap(async (req, res) => {
+  const h = req.get('authorization') || '';
+  if (h.startsWith('Bearer ')) await pool.query('UPDATE api_tokens SET revoked = true WHERE token_hash = $1', [sha(h.slice(7).trim())]);
+  res.json({ ok: true });
+}));
+app.get('/api/mobile/devices', auth('admin'), wrap(async (req, res) => {
+  res.json((await pool.query(`SELECT t.id, u.name, u.email, t.device, t.created_at, t.last_used FROM api_tokens t JOIN users u ON u.id = t.user_id
+    WHERE NOT t.revoked AND t.expires_at > now() ORDER BY t.last_used DESC NULLS LAST`)).rows);
+}));
+app.post('/api/mobile/devices/:id/revoke', auth('admin'), wrap(async (req, res) => {
+  await pool.query('UPDATE api_tokens SET revoked = true WHERE id = $1', [int(req.params.id)]);
+  await db(req, c => A(c, req, 'revocar_dispositivo', 'usuario', req.params.id, null, null)); res.json({ ok: true });
+}));
 app.post('/api/logout', (req, res) => req.session.destroy(() => { res.clearCookie('lt.sid'); res.json({ ok: true }); }));
 app.get('/api/me', wrap(async (req, res) => {
-  const u = req.session.user;
+  const u = req.session.user || req.tokenUser;
   const demo = process.env.SEED_DEMO ? process.env.SEED_DEMO === '1' : process.env.NODE_ENV !== 'production';
   if (!u) return res.json({ user: null, demo });
   const s = (await pool.query("SELECT value FROM settings WHERE key = 'firm'")).rows[0]?.value || {};
@@ -170,6 +221,7 @@ app.patch('/api/users/:id', auth('admin'), wrap(async (req, res) => {
   if (f.role) need(STAFF.includes(f.role), 'Rol inválido');
   need(!(int(req.params.id) === req.user.id && (f.active === false || (f.role && f.role !== 'admin'))), 'No puede desactivar o quitar Administración a su propio usuario');
   const u = await db(req, async c => { const u = await updateRow(c, 'users', int(req.params.id), f); await A(c, req, 'editar', 'usuario', req.params.id, u?.client_id, f); return u; });
+  if (f.active === false) await pool.query('UPDATE api_tokens SET revoked = true WHERE user_id = $1', [u.id]);
   res.json({ id: u.id });
 }));
 app.post('/api/users/:id/invite', auth('admin'), wrap(async (req, res) => {

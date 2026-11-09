@@ -15,7 +15,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 async function main() {
   if (process.argv.includes('--reset')) {
-    await pool.query(`DROP TABLE IF EXISTS notices, invoices, email_log, doc_types, audit_log, saved_queries, generated_docs, doc_requests, payments, installments, quote_items, quotes, documents,
+    await pool.query(`DROP TABLE IF EXISTS api_tokens, notices, invoices, email_log, doc_types, audit_log, saved_queries, generated_docs, doc_requests, payments, installments, quote_items, quotes, documents,
       deadlines, case_events, cases, templates, doc_sequences, settings, users, clients, session CASCADE`);
     fs.rmSync(S.FILES, { recursive: true, force: true }); fs.mkdirSync(S.FILES, { recursive: true });
     console.log('Base de datos y archivos reiniciados.');

@@ -360,6 +360,18 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS pages integer;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS notes text;
 CREATE INDEX IF NOT EXISTS documents_case_idx ON documents(case_id);
 
+-- ───────── Acceso desde la app móvil (tokens por dispositivo) ─────────
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id          serial PRIMARY KEY,
+  user_id     integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash  text NOT NULL UNIQUE,
+  device      text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  last_used   timestamptz,
+  expires_at  timestamptz NOT NULL DEFAULT now() + interval '90 days',
+  revoked     boolean NOT NULL DEFAULT false
+);
+
 -- ───────── Seguridad a nivel de fila (RLS) ─────────
 -- Personal: acceso completo. Cliente: solo sus registros y solo lo publicado.
 DO $$

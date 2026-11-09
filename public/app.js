@@ -161,6 +161,7 @@ async function noticeModal(kind, clientId, ref) {
 const notice = (kind, clientId, ref) => noticeModal(kind, clientId, ref).catch(fail);
 
 // ───────────────────────── estado y enrutador
+let syncLast = null;
 const state = { me: null, client: null, firm: {}, staff: [] };
 const go = h => { if (location.hash !== h) location.hash = h; else render(); };
 const routes = [];
@@ -170,13 +171,14 @@ window.addEventListener('hashchange', () => render());
 async function boot() {
   try { const r = await GET('/api/me'); state.me = r.user; state.client = r.client; state.firm = r.firm || {}; state.demo = !!r.demo; } catch (_) { state.me = null; }
   if (state.me && state.me.role !== 'cliente') {
+    syncLast = (await GET('/api/sync').catch(() => ({}))).last ?? null;
     state.staff = await GET('/api/staff').catch(() => []);
     state.mail = await GET('/api/email/config').catch(() => ({}));
     state.docTypes = await GET('/api/doc-types').catch(() => []);
   }
   render();
 }
-async function render() {
+async function render(opts = {}) {
   const hash = location.hash || '#/';
   if (hash.startsWith('#/invitacion/')) return viewInvite(hash.split('/')[2]);
   if (!state.me) return viewLogin();
@@ -193,7 +195,7 @@ async function render() {
     if (r.roles && !r.roles.includes(state.me.role)) { main.innerHTML = '<div class="card empty">No tiene permiso para ver esta sección.</div>'; return; }
     main.innerHTML = '<div class="empty">Cargando…</div>';
     try { await r.fn(main, m.slice(1), query); } catch (e) { main.innerHTML = String(html`<div class="card alert bad">${e.message}</div>`); }
-    window.scrollTo(0, 0);
+    if (!opts.silent) window.scrollTo(0, 0);
     return;
   }
   main.innerHTML = '<div class="card empty">Página no encontrada.</div>';
@@ -1290,4 +1292,17 @@ route(/^\/mis-documentos$/, async el => {
   bindGendocs(el);
 }, ['cliente']);
 
+// ── sincronización: si otra persona del equipo cambia algo, la pantalla se actualiza sola
+setInterval(async () => {
+  if (!state.me || state.me.role === 'cliente' || document.hidden) return;
+  try {
+    const r = await GET('/api/sync');
+    if (syncLast !== null && r.last !== syncLast) {
+      const busy = $('#modal-root').children.length || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+      if (busy) return; // se reintenta en el próximo ciclo sin perder el cambio
+      const y = window.scrollY; await render({ silent: true }); window.scrollTo(0, y);
+    }
+    syncLast = r.last;
+  } catch (_) { /* sin conexión: se reintenta */ }
+}, 15000);
 boot();
