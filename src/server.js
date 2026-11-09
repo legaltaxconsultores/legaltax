@@ -57,6 +57,7 @@ const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch
 const auth = (...roles) => (req, res, next) => {
   const u = req.session.user || req.tokenUser;
   if (!u) return res.status(401).json({ error: 'Sesión no iniciada' });
+  if (u.must_change) return res.status(403).json({ error: 'Debe cambiar su contraseña temporal antes de continuar.', must_change: true });
   if (roles.length && !roles.includes(u.role)) return res.status(403).json({ error: 'No tiene permiso para esta acción' });
   req.user = u; next();
 };
@@ -82,26 +83,75 @@ function sendFile(res, abs, filename, mime, inline) {
 
 // ───────── autenticación
 const attempts = new Map();
+// ───────── inicio de sesión: por correo o nombre de usuario, con mensajes claros y bloqueo temporal
+const MAX_FAILS = 5, LOCK_MIN = 15;
+const findUser = id => pool.query('SELECT * FROM users WHERE lower(email) = $1 OR lower(username) = $1 ORDER BY (lower(email) = $1) DESC LIMIT 1', [id]).then(r => r.rows[0]);
+const passwordProblem = pw => (pw.length < 8 ? 'La contraseña debe tener al menos 8 caracteres.' : !/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(pw) || !/\d/.test(pw) ? 'La contraseña debe combinar letras y números.' : null);
+const hhmm = d => new Intl.DateTimeFormat('es-DO', { timeZone: 'America/Santo_Domingo', hour: 'numeric', minute: '2-digit', hour12: true }).format(d);
 app.post('/api/login', wrap(async (req, res) => {
-  const email = String(req.body.email || '').trim().toLowerCase();
-  const key = req.ip + '|' + email; const a = attempts.get(key) || { n: 0, t: Date.now() };
-  if (a.n >= 8 && Date.now() - a.t < 15 * 60e3) return res.status(429).json({ error: 'Demasiados intentos. Espere 15 minutos.' });
-  const { rows } = await pool.query('SELECT * FROM users WHERE lower(email) = $1 AND active', [email]);
-  const u = rows[0];
-  if (!u || !u.password_hash || !(await bcrypt.compare(String(req.body.password || ''), u.password_hash))) {
-    attempts.set(key, { n: a.n + 1, t: a.n === 0 ? Date.now() : a.t });
-    return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
+  const id = String(req.body.email || req.body.identifier || '').trim().toLowerCase();
+  const ipKey = 'ip|' + req.ip; const a = attempts.get(ipKey) || { n: 0, t: Date.now() };
+  if (a.n >= 30 && Date.now() - a.t < 15 * 60e3) return res.status(429).json({ error: 'Demasiados intentos desde esta conexión. Espere 15 minutos.' });
+  const fail = (status, error, extra = {}) => { attempts.set(ipKey, { n: a.n + 1, t: a.n === 0 ? Date.now() : a.t }); return res.status(status).json({ error, ...extra }); };
+  if (!id || !req.body.password) return res.status(400).json({ error: 'Escriba su usuario o correo y su contraseña.', field: !id ? 'email' : 'password' });
+  const u = await findUser(id);
+  if (!u) return fail(401, 'No existe ningún usuario con ese correo o nombre de usuario. Revise que esté bien escrito.', { field: 'email' });
+  if (!u.active) return fail(403, 'Su usuario está desactivado. Contacte a Administración.', { field: 'email' });
+  if (u.locked_until && new Date(u.locked_until) > new Date()) return fail(429, `Por seguridad, su usuario está bloqueado hasta las ${hhmm(new Date(u.locked_until))} por varios intentos fallidos. Si olvidó su contraseña, pida a Administración que la restablezca.`, { field: 'password' });
+  if (!u.password_hash) return fail(403, 'Su cuenta todavía no está activada. Abra el enlace de invitación que le enviaron o pida uno nuevo a Administración.', { field: 'email' });
+  if (!(await bcrypt.compare(String(req.body.password), u.password_hash))) {
+    const n = (u.failed_logins || 0) + 1;
+    if (n >= MAX_FAILS) {
+      await pool.query(`UPDATE users SET failed_logins = 0, locked_until = now() + interval '${LOCK_MIN} minutes' WHERE id = $1`, [u.id]);
+      await withCtx(SYSTEM, c => S.audit(c, { id: u.id, name: u.name, role: u.role }, 'bloqueo_por_intentos', 'usuario', u.id, u.client_id, null, req.ip));
+      return fail(429, `Contraseña incorrecta. Por seguridad, su usuario quedó bloqueado ${LOCK_MIN} minutos. Si olvidó su contraseña, pida a Administración que la restablezca.`, { field: 'password' });
+    }
+    await pool.query('UPDATE users SET failed_logins = $2 WHERE id = $1', [u.id, n]);
+    return fail(401, `Contraseña incorrecta. Le ${MAX_FAILS - n === 1 ? 'queda 1 intento' : `quedan ${MAX_FAILS - n} intentos`} antes de un bloqueo temporal. Recuerde que distingue mayúsculas y minúsculas.`, { field: 'password' });
   }
-  attempts.delete(key);
-  await pool.query('UPDATE users SET last_login = now() WHERE id = $1', [u.id]);
+  attempts.delete(ipKey);
+  await pool.query('UPDATE users SET last_login = now(), failed_logins = 0, locked_until = NULL WHERE id = $1', [u.id]);
   const clientName = u.client_id ? (await withCtx(SYSTEM, c => c.query('SELECT name FROM clients WHERE id = $1', [u.client_id]))).rows[0]?.name : null;
   req.session.regenerate(err => {
     if (err) return res.status(500).json({ error: 'Error de sesión' });
-    req.session.user = { id: u.id, name: u.name, email: u.email, role: u.role, client_id: u.client_id };
+    req.session.user = { id: u.id, name: u.name, email: u.email, username: u.username, role: u.role, client_id: u.client_id, must_change: !!u.must_change_password };
     req.session.clientName = clientName;
+    // "Mantener la sesión iniciada": 30 días; si no, 8 horas
+    req.session.cookie.maxAge = req.body.remember ? 30 * 864e5 : 8 * 3600e3;
     withCtx(req.session.user, c => S.audit(c, req.session.user, 'inicio_sesion', 'usuario', u.id, u.client_id, null, req.ip)).catch(() => {});
     res.json({ user: req.session.user });
   });
+}));
+// Cambiar la propia contraseña (obligatorio en el primer ingreso con contraseña temporal)
+app.post('/api/account/password', (req, res, next) => (req.session.user || req.tokenUser ? next() : res.status(401).json({ error: 'Sesión no iniciada' })), wrap(async (req, res) => {
+  const me = req.session.user || req.tokenUser;
+  const u = (await pool.query('SELECT * FROM users WHERE id = $1', [me.id])).rows[0];
+  need(u && (await bcrypt.compare(String(req.body.current || ''), u.password_hash || '')), 'La contraseña actual no es correcta.');
+  const pw = String(req.body.password || ''); const prob = passwordProblem(pw); need(!prob, prob);
+  need(pw !== req.body.current, 'La nueva contraseña debe ser distinta de la actual.');
+  await pool.query('UPDATE users SET password_hash = $2, must_change_password = false, password_changed_at = now() WHERE id = $1', [u.id, await bcrypt.hash(pw, 10)]);
+  if (req.session.user) req.session.user.must_change = false;
+  await withCtx(SYSTEM, c => S.audit(c, { id: u.id, name: u.name, role: u.role }, 'cambiar_contrasena', 'usuario', u.id, u.client_id, null, req.ip));
+  res.json({ ok: true, user: req.session.user });
+}));
+// ¿Olvidó su contraseña?: envía un enlace por correo si el correo está configurado
+app.post('/api/password/forgot', wrap(async (req, res) => {
+  const id = String(req.body.identifier || '').trim().toLowerCase(); need(id, 'Escriba su usuario o correo.');
+  const u = await findUser(id);
+  const generic = { ok: true, message: 'Si el usuario existe y tiene correo registrado, le enviamos un enlace para crear una nueva contraseña. Revise su bandeja de entrada (y el correo no deseado).' };
+  if (!u || !u.active) return res.json(generic);
+  const sent = await withCtx(SYSTEM, async c => {
+    const cfg = await M.getConfig(c); if (!cfg.configured) return false;
+    const token = crypto.randomBytes(24).toString('hex');
+    await c.query("UPDATE users SET invite_token = $2, invite_expires = now() + interval '1 hour' WHERE id = $1", [u.id, token]);
+    const firm = (await c.query("SELECT value FROM settings WHERE key = 'firm'")).rows[0]?.value || {};
+    const link = `${req.protocol}://${req.get('host')}/#/invitacion/${token}`;
+    await M.send(c, null, { to: u.email, subject: 'Restablecer su contraseña de LegalTax', kind: 'restablecer', attachments: [M.logoAttachment(S.BRAND_LOGO)],
+      html: M.layout('Restablecer contraseña', `<p>Hola, ${esc(u.name)}.</p><p>Recibimos una solicitud para restablecer su contraseña. Use este enlace (válido por 1 hora):</p><p><a href="${link}" style="background:#876440;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;display:inline-block">Crear nueva contraseña</a></p><p style="color:#7A6E62;font-size:13px">Si usted no lo solicitó, ignore este mensaje.</p>`, firm) });
+    await S.audit(c, { id: u.id, name: u.name, role: u.role }, 'solicitar_restablecer', 'usuario', u.id, u.client_id, null, req.ip);
+    return true;
+  }).catch(() => false);
+  res.json(sent ? generic : { ok: false, message: 'El envío por correo aún no está configurado. Pida a Administración que restablezca su contraseña (Configuración → Usuarios).' });
 }));
 // Marcador de cambios: todas las apps consultan aquí y recargan cuando alguien modifica algo
 app.get('/api/sync', auth(), wrap(async (req, res) => {
@@ -151,16 +201,15 @@ app.get('/api/me', wrap(async (req, res) => {
   res.json({ user: u, client, firm: { name: s.firm_name, tagline: s.tagline, has_logo: !!s.logo_key } });
 }));
 app.get('/api/invite/:token', wrap(async (req, res) => {
-  const u = (await pool.query('SELECT name, email, invite_expires FROM users WHERE invite_token = $1 AND active', [req.params.token])).rows[0];
-  if (!u || new Date(u.invite_expires) < new Date()) return res.status(404).json({ error: 'La invitación no es válida o ha vencido' });
-  res.json({ name: u.name, email: u.email });
+  const u = (await pool.query('SELECT name, email, username, invite_expires, (password_hash IS NOT NULL) AS has_pw FROM users WHERE invite_token = $1 AND active', [req.params.token])).rows[0];
+  if (!u || new Date(u.invite_expires) < new Date()) return res.status(404).json({ error: 'El enlace no es válido o ya venció. Pida uno nuevo a Administración.' });
+  res.json({ name: u.name, email: u.email, username: u.username, reset: u.has_pw });
 }));
 app.post('/api/invite/:token', wrap(async (req, res) => {
-  const pw = String(req.body.password || '');
-  need(pw.length >= 8, 'La contraseña debe tener al menos 8 caracteres');
+  const pw = String(req.body.password || ''); const prob = passwordProblem(pw); need(!prob, prob);
   const u = (await pool.query('SELECT * FROM users WHERE invite_token = $1 AND active', [req.params.token])).rows[0];
-  if (!u || new Date(u.invite_expires) < new Date()) return res.status(404).json({ error: 'La invitación no es válida o ha vencido' });
-  await pool.query('UPDATE users SET password_hash = $2, invite_token = NULL, invite_expires = NULL WHERE id = $1', [u.id, await bcrypt.hash(pw, 10)]);
+  if (!u || new Date(u.invite_expires) < new Date()) return res.status(404).json({ error: 'El enlace no es válido o ya venció. Pida uno nuevo a Administración.' });
+  await pool.query('UPDATE users SET password_hash = $2, invite_token = NULL, invite_expires = NULL, must_change_password = false, password_changed_at = now(), failed_logins = 0, locked_until = NULL WHERE id = $1', [u.id, await bcrypt.hash(pw, 10)]);
   await withCtx(SYSTEM, c => S.audit(c, { id: u.id, name: u.name, role: u.role }, 'activar_cuenta', 'usuario', u.id, u.client_id, null, req.ip));
   res.json({ ok: true, email: u.email });
 }));
@@ -202,28 +251,49 @@ app.get('/api/staff', auth(...STAFF), wrap(async (req, res) => {
   res.json((await pool.query("SELECT id, name, role FROM users WHERE role <> 'cliente' AND active ORDER BY name")).rows);
 }));
 app.get('/api/users', auth('admin'), wrap(async (req, res) => {
-  res.json((await pool.query(`SELECT u.id, u.name, u.email, u.role, u.client_id, u.active, u.last_login, u.invite_expires, (u.password_hash IS NOT NULL) AS activated, c.name AS client_name
+  res.json((await pool.query(`SELECT u.id, u.name, u.email, u.username, u.role, u.client_id, u.active, u.last_login, u.invite_expires, (u.password_hash IS NOT NULL) AS activated, c.name AS client_name,
+      u.must_change_password, (u.locked_until > now()) AS locked
     FROM users u LEFT JOIN clients c ON c.id = u.client_id ORDER BY u.role, u.name`)).rows);
 }));
 function inviteLink(req, token) { return `${req.protocol}://${req.get('host')}/#/invitacion/${token}`; }
 app.post('/api/users', auth('admin'), wrap(async (req, res) => {
   const b = req.body; need(STAFF.includes(b.role), 'Rol inválido'); need(str(b.email) && str(b.name), 'Nombre y correo son obligatorios');
-  const token = crypto.randomBytes(24).toString('hex');
+  const username = str(b.username) ? String(b.username).trim().toLowerCase() : null;
+  if (username) need(/^[a-z0-9._-]{3,30}$/.test(username), 'El usuario solo puede tener letras sin acentos, números, punto, guion o guion bajo (3 a 30).');
+  const temp = str(b.temp_password);
+  if (temp) { const prob = passwordProblem(temp); need(!prob, prob); }
+  const token = temp ? null : crypto.randomBytes(24).toString('hex');
   const u = await db(req, async c => {
-    const u = (await c.query("INSERT INTO users (email, name, role, invite_token, invite_expires) VALUES (lower($1),$2,$3,$4, now() + interval '7 days') RETURNING id, email, name, role",
-      [b.email.trim(), b.name.trim(), b.role, token])).rows[0];
-    await A(c, req, 'crear', 'usuario', u.id, null, { role: b.role, email: u.email });
+    const u = (await c.query(`INSERT INTO users (email, name, username, role, password_hash, must_change_password, invite_token, invite_expires)
+      VALUES (lower($1),$2,$3,$4,$5,$6,$7, CASE WHEN $7::text IS NULL THEN NULL ELSE now() + interval '7 days' END) RETURNING id, email, name, username, role`,
+    [b.email.trim(), b.name.trim(), username, b.role, temp ? await bcrypt.hash(temp, 10) : null, !!temp, token])).rows[0];
+    await A(c, req, 'crear', 'usuario', u.id, null, { role: b.role, email: u.email, username });
     return u;
   });
-  res.json({ ...u, invite_link: inviteLink(req, token) });
+  res.json({ ...u, invite_link: token ? inviteLink(req, token) : null, temp_password: temp || null });
 }));
 app.patch('/api/users/:id', auth('admin'), wrap(async (req, res) => {
-  const f = pick(req.body, ['name', 'role', 'active']);
+  const f = pick(req.body, ['name', 'role', 'active', 'username']);
+  if (f.username) { f.username = String(f.username).trim().toLowerCase(); need(/^[a-z0-9._-]{3,30}$/.test(f.username), 'Usuario inválido (letras sin acentos, números, punto, guion; 3 a 30).'); }
   if (f.role) need(STAFF.includes(f.role), 'Rol inválido');
   need(!(int(req.params.id) === req.user.id && (f.active === false || (f.role && f.role !== 'admin'))), 'No puede desactivar o quitar Administración a su propio usuario');
   const u = await db(req, async c => { const u = await updateRow(c, 'users', int(req.params.id), f); await A(c, req, 'editar', 'usuario', req.params.id, u?.client_id, f); return u; });
   if (f.active === false) await pool.query('UPDATE api_tokens SET revoked = true WHERE user_id = $1', [u.id]);
   res.json({ id: u.id });
+}));
+app.post('/api/users/:id/temp-password', auth('admin'), wrap(async (req, res) => {
+  const pw = String(req.body.password || ''); const prob = passwordProblem(pw); need(!prob, prob);
+  await db(req, async c => {
+    const r = await c.query('UPDATE users SET password_hash = $2, must_change_password = true, failed_logins = 0, locked_until = NULL, invite_token = NULL WHERE id = $1 RETURNING id', [int(req.params.id), await bcrypt.hash(pw, 10)]);
+    need(r.rowCount, 'Usuario no encontrado', 404);
+    await A(c, req, 'restablecer_contrasena', 'usuario', req.params.id, null, null);
+  });
+  await pool.query('UPDATE api_tokens SET revoked = true WHERE user_id = $1', [int(req.params.id)]).catch(() => {});
+  res.json({ ok: true });
+}));
+app.post('/api/users/:id/unlock', auth('admin'), wrap(async (req, res) => {
+  await db(req, async c => { await c.query('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1', [int(req.params.id)]); await A(c, req, 'desbloquear', 'usuario', req.params.id, null, null); });
+  res.json({ ok: true });
 }));
 app.post('/api/users/:id/invite', auth('admin'), wrap(async (req, res) => {
   const token = crypto.randomBytes(24).toString('hex');

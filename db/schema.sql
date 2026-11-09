@@ -376,6 +376,14 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS folder_name text;
 ALTER TABLE cases ADD COLUMN IF NOT EXISTS folder_name text;
 
+-- ───────── Acceso: nombre de usuario, cambio obligatorio de contraseña y bloqueo por intentos ─────────
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_logins integer NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until timestamptz;
+CREATE UNIQUE INDEX IF NOT EXISTS users_username_uq ON users (lower(username)) WHERE username IS NOT NULL;
+
 -- ───────── Seguridad a nivel de fila (RLS) ─────────
 -- Personal: acceso completo. Cliente: solo sus registros y solo lo publicado.
 DO $$

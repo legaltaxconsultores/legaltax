@@ -148,6 +148,24 @@ En Linux, este paso requiere Wine.
 
 **Servidor en una computadora de la oficina (alternativa a Render):** instale Node.js 20+ y PostgreSQL en una PC que permanezca encendida. Luego ejecute `npm install`, `node src/seed.js` y `npm start` (con `NODE_ENV=production` y `ADMIN_PASSWORD`). Las demás computadoras se conectan a `http://IP-de-esa-PC:3000`. Este servidor solo es accesible dentro de la red de la oficina.
 
+## Inicio de sesión y usuarios
+
+- **Cómo se entra:** con el **nombre de usuario** (por ejemplo `jperez`) o con el **correo**, más la contraseña. Hay un botón 👁 para ver lo escrito y un aviso si Bloq Mayús está activado.
+- **"Mantener la sesión iniciada en esta computadora":** la sesión dura 30 días; sin marcarlo, 8 horas.
+- **Mensajes de error claros:** usuario inexistente, contraseña incorrecta (con los intentos que quedan), cuenta desactivada o sin activar.
+- **Bloqueo por intentos:** tras **5 intentos fallidos**, el usuario queda bloqueado 15 minutos. Administración puede desbloquearlo desde *Configuración → Usuarios*.
+- **Contraseña temporal:** al crear un usuario, Administración le asigna una contraseña temporal. En el primer ingreso el sistema **obliga a cambiarla** por una personal (mínimo 8 caracteres, con letras y números) y no deja usar nada más hasta hacerlo.
+- **"Mi cuenta":** en el menú lateral, para cambiar la propia contraseña cuando se quiera.
+- **"¿Olvidó su contraseña?":** envía un enlace por correo si el correo está configurado; si no, indica que hay que pedirlo a Administración.
+
+**Cargar los usuarios del despacho:** copie `config/usuarios.ejemplo.json` a `config/usuarios.json` con los datos reales (nombre, correo, usuario, rol `admin` / `expedientes` / `cobros`, contraseña temporal) y ejecute:
+
+```bash
+node scripts/usuarios.js config/usuarios.json
+```
+
+En Render se ejecuta desde la pestaña **Shell** del servicio. También se pueden crear uno por uno desde *Configuración → Usuarios*. No suba `config/usuarios.json` a GitHub, porque contiene contraseñas.
+
 ## Usuarios de la versión de prueba
 
 Todos usan la contraseña **`LegalTax2026!`**

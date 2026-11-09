@@ -38,7 +38,7 @@ async function login(page, email) {
   await page.goto(BASE + '/#/login');
   await page.fill('input[name=email]', email); await page.fill('input[name=password]', PASS);
   await page.click('form#lf button.primary');
-  await page.waitForSelector('#shell');
+  await page.waitForSelector('#shell', { timeout: 15000 }).catch(async e => { throw new Error(`No se pudo entrar como ${email}: ${await page.locator('#lerr').textContent().catch(() => '')} [${page.url()}]`); });
 }
 async function logout(page) { await page.click('#logout'); await page.waitForSelector('form#lf'); }
 async function toast(page, re) { const t = page.locator('.toast').filter({ hasText: re }); await t.first().waitFor({ timeout: 10000 }); return t.first().textContent(); }
@@ -186,7 +186,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, name + '.png
 
   // ── 2. Cliente: activa su acceso, acepta la cotización y sube un voucher de abono
   await page.goto(inviteLink.replace(/^https?:\/\/[^/]+/, BASE));
-  await page.fill('#if input[name=password]', PASS); await page.fill('#if input[name=password2]', PASS); await page.click('#if button');
+  await page.fill('#if input[name=password]', PASS); await page.fill('#if input[name=password2]', PASS); await page.click('#if button.primary');
   await page.waitForSelector('#shell'); check(true, 'Cliente activó su cuenta desde la invitación');
   await page.goto(BASE + '/#/mis-cotizaciones'); await page.click('text=Revisar y aceptar');
   await page.click('text=✓ Aceptar cotización'); await toast(page, /aceptada/);

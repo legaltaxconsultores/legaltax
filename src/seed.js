@@ -65,7 +65,7 @@ async function main() {
       const exists = (await c.query('SELECT 1 FROM users WHERE lower(email) = $1', [ADMIN_EMAIL])).rowCount;
       if (!exists) {
         if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 8) throw new Error('Defina ADMIN_PASSWORD (mínimo 8 caracteres) para crear la cuenta de Administración');
-        await c.query("INSERT INTO users (email, name, role, password_hash) VALUES ($1, 'Administración LegalTax', 'admin', $2)", [ADMIN_EMAIL, await bcrypt.hash(ADMIN_PASSWORD, 10)]);
+        await c.query("INSERT INTO users (email, name, username, role, password_hash) VALUES ($1, 'Administración LegalTax', 'admin', 'admin', $2)", [ADMIN_EMAIL, await bcrypt.hash(ADMIN_PASSWORD, 10)]);
         console.log('Cuenta de Administración creada:', ADMIN_EMAIL);
       }
       return;
@@ -77,6 +77,7 @@ async function main() {
       ['cobros@legaltax.do', 'Carmen Rosario (Cobros)', 'cobros'],
     ];
     for (const [e, n, r] of staff) await c.query('INSERT INTO users (email, name, role, password_hash) VALUES ($1,$2,$3,$4) ON CONFLICT (email) DO NOTHING', [e, n, r, hash]);
+    for (const [e, un] of [['admin@legaltax.do', 'admin'], ['expedientes@legaltax.do', 'expedientes'], ['cobros@legaltax.do', 'cobros']]) await c.query('UPDATE users SET username = $2 WHERE email = $1 AND username IS NULL', [e, un]);
     const exp = (await c.query("SELECT id FROM users WHERE email = 'expedientes@legaltax.do'")).rows[0].id;
 
     // Cliente ficticio 2 (persona física) con un expediente y una resolución privada.

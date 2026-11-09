@@ -1,0 +1,5 @@
+[
+  { "nombre": "Nombre Apellido", "correo": "nombre@legaltax.do", "usuario": "napellido", "rol": "admin", "contrasena_temporal": "Cambiar2026" },
+  { "nombre": "Otra Persona", "correo": "otra@legaltax.do", "usuario": "opersona", "rol": "expedientes", "contrasena_temporal": "Cambiar2026" },
+  { "nombre": "Persona de Cobros", "correo": "cobros.persona@legaltax.do", "usuario": "pcobros", "rol": "cobros", "contrasena_temporal": "Cambiar2026" }
+]

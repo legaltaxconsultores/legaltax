@@ -4,3 +4,4 @@ backups/
 test/output/
 entrega/
 .env
+config/usuarios.json

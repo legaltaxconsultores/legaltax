@@ -182,6 +182,7 @@ async function render(opts = {}) {
   const hash = location.hash || '#/';
   if (hash.startsWith('#/invitacion/')) return viewInvite(hash.split('/')[2]);
   if (!state.me) return viewLogin();
+  if (state.me.must_change) return viewChangePassword();
   if (hash === '#/login') return go('#/');
   const path = hash.slice(1).split('?')[0];
   const query = Object.fromEntries(new URLSearchParams(hash.split('?')[1] || ''));
@@ -220,7 +221,7 @@ function shell() {
         ${nav.map(([h, ic, l]) => html`<a href="${h}" data-nav="${h}"><span class="ic">${ic}</span>${l}</a>`)}
         ${me.role === 'admin' ? html`<div class="nav-sep">Administración</div><a href="#/admin" data-nav="#/admin"><span class="ic">⚙</span>Configuración</a>` : ''}
       </nav>
-      <div class="who"><b>${me.name}</b>${isClient ? state.client?.name : L.role[me.role]}<br><button class="btn sm" id="logout" style="margin-top:8px">Cerrar sesión</button></div>
+      <div class="who"><b>${me.name}</b>${isClient ? state.client?.name : L.role[me.role]}<br><span class="actions" style="margin-top:8px"><button class="btn sm" id="myacct">Mi cuenta</button><button class="btn sm" id="logout">Cerrar sesión</button></span></div>
     </aside>
     <div class="main">
       <div class="top">
@@ -230,7 +231,8 @@ function shell() {
       <div class="content" id="content"></div>
     </div>
   </div>`);
-  $('#logout').onclick = async () => { await POST('/api/logout').catch(() => {}); state.me = null; location.hash = '#/login'; render(); };
+  $('#myacct').onclick = () => myAccountModal();
+  $('#logout').onclick = async () => { await POST('/api/logout').catch(() => {}); state.me = null; go('#/login'); };
   $('#menu').onclick = () => $('#side').classList.toggle('open');
   $('#side').addEventListener('click', e => { if (e.target.closest('a')) $('#side').classList.remove('open'); });
   const gs = $('#gsearch'); if (gs) gs.onsubmit = e => { e.preventDefault(); const q = gs.q.value.trim(); if (q) go('#/buscar?q=' + encodeURIComponent(q)); };
@@ -259,50 +261,147 @@ function act(root, handlers) {
 }
 
 // ───────────────────────── inicio de sesión e invitación
-function viewLogin() {
-  $('#app').innerHTML = String(html`<div class="login">
-    <section class="hero">
+const pwField = (name, label, ac, extra = '') => html`<label class="f">${label}<span class="pw"><input name="${name}" type="password" required autocomplete="${ac}" ${raw(extra)}><button type="button" class="eye" data-eye aria-label="Mostrar u ocultar contraseña" title="Mostrar u ocultar">👁</button></span></label>`;
+function bindPw(root) {
+  on(root, '[data-eye]', 'click', (e, b) => { const i = b.previousElementSibling; i.type = i.type === 'password' ? 'text' : 'password'; b.classList.toggle('on', i.type === 'text'); i.focus(); });
+  on(root, 'input[type=password]', 'keyup', (e, i) => { const n = $('.caps', root); if (n && e.getModifierState) n.hidden = !e.getModifierState('CapsLock'); });
+}
+const pwRules = pw => [[pw.length >= 8, 'Al menos 8 caracteres'], [/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(pw), 'Al menos una letra'], [/\d/.test(pw), 'Al menos un número']];
+function loginHero(title, text) {
+  return html`<section class="hero">
       <div><span class="logo-card"><img src="/brand/logo.png" alt="LegalTax Consultores SRL"></span></div>
-      <div><h1>Expedientes, cobros y documentos <span class="gold">en un solo lugar.</span></h1>
-      <p>Panel interno del despacho y portal privado para clientes. República Dominicana · Montos en RD$ · Hora de Santo Domingo.</p></div>
-      <div class="foot small" style="color:#8FA0BF">Acceso restringido. Toda actividad queda registrada.</div>
-    </section>
-    <section class="panel"><form id="lf" autocomplete="on">
-      <h2>Iniciar sesión</h2>
-      <label class="f">Correo electrónico<input name="email" type="email" required autocomplete="username"></label>
-      <label class="f">Contraseña<input name="password" type="password" required autocomplete="current-password"></label>
-      <button class="btn primary" style="width:100%;padding:11px">Entrar</button>
-      ${state.demo ? html`<div class="demo-users"><b>Versión de prueba</b> — haga clic en un usuario para entrar (contraseña de todos: <code>LegalTax2026!</code>)<br>
-        ${[['admin@legaltax.do', 'Administración'], ['expedientes@legaltax.do', 'Expedientes'], ['cobros@legaltax.do', 'Cobros'], ['maria.pena@example.com', 'Cliente: María Peña'], ['finanzas@caribeazul.do', 'Cliente: Constructora Caribe Azul']]
-          .map(([e, l]) => html`<button type="button" class="btn link" data-email="${e}">${l}</button><br>`)}
-      </div>` : html`<p class="small muted" style="margin-top:14px">¿Olvidó su contraseña? Pida a Administración un nuevo enlace de acceso.</p>`}
-    </form></section></div>`);
-  const f = $('#lf');
+      <div><h1>${title}</h1><p>${text}</p></div>
+      <div class="foot small">Acceso restringido. Toda actividad queda registrada.</div>
+    </section>`;
+}
+function viewLogin() {
+  if ($('#lf') && !$('#shell')) return; // ya está en pantalla: no borrar lo que el usuario está escribiendo
+  $('#app').innerHTML = String(html`<div class="login">
+    ${loginHero(raw('Expedientes, cobros y documentos <span class="gold">en un solo lugar.</span>'), 'Sistema interno de LegalTax Consultores y portal privado para clientes. República Dominicana · Montos en RD$ · Hora de Santo Domingo.')}
+    <section class="panel">
+      <form id="lf" autocomplete="on" novalidate>
+        <h2>Iniciar sesión</h2>
+        <div class="login-err" id="lerr" role="alert" hidden></div>
+        <label class="f">Usuario o correo<input name="email" type="text" required autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="su usuario o su correo"></label>
+        ${pwField('password', 'Contraseña', 'current-password')}
+        <div class="caps small" hidden>⚠ Bloq Mayús está activado</div>
+        <label class="chk" style="margin:4px 0 14px"><input type="checkbox" name="remember"> Mantener la sesión iniciada en esta computadora</label>
+        <button class="btn primary" id="lbtn" style="width:100%;padding:11px">Entrar</button>
+        <p style="text-align:center;margin:14px 0 0"><button type="button" class="btn link" id="forgot">¿Olvidó su contraseña?</button></p>
+        ${state.demo ? html`<div class="demo-users"><b>Versión de prueba</b> — haga clic en un usuario para entrar (contraseña de todos: <code>LegalTax2026!</code>)<br>
+          ${[['admin@legaltax.do', 'Administración'], ['expedientes@legaltax.do', 'Expedientes'], ['cobros@legaltax.do', 'Cobros'], ['maria.pena@example.com', 'Cliente: María Peña'], ['finanzas@caribeazul.do', 'Cliente: Constructora Caribe Azul']]
+            .map(([e, l]) => html`<button type="button" class="btn link" data-email="${e}">${l}</button><br>`)}
+        </div>` : ''}
+      </form>
+      <form id="ff" novalidate hidden>
+        <h2>Restablecer contraseña</h2>
+        <p class="muted small">Escriba su usuario o correo. Si el envío por correo está configurado, le llegará un enlace para crear una nueva contraseña.</p>
+        <label class="f">Usuario o correo<input name="identifier" type="text" required autocapitalize="none" spellcheck="false"></label>
+        <div class="login-msg" id="fmsg" hidden></div>
+        <button class="btn primary" style="width:100%;padding:11px">Enviar enlace</button>
+        <p style="text-align:center;margin:14px 0 0"><button type="button" class="btn link" id="back">← Volver a iniciar sesión</button></p>
+      </form>
+    </section></div>`);
+  const f = $('#lf'), ff = $('#ff'), err = $('#lerr');
+  bindPw(f);
+  const showErr = (msg, field) => {
+    err.textContent = msg; err.hidden = false;
+    $$('input', f).forEach(i => i.classList.remove('bad'));
+    if (field && f[field]) { f[field].classList.add('bad'); f[field].focus(); if (field === 'password') f.password.select(); }
+  };
   // versión de prueba: un clic en el usuario completa correo y contraseña y entra
   on(f, '[data-email]', 'click', (e, b) => { f.email.value = b.dataset.email; f.password.value = 'LegalTax2026!'; f.requestSubmit ? f.requestSubmit() : f.onsubmit(new Event('submit')); });
   f.onsubmit = async e => {
     e.preventDefault();
-    try { const r = await POST('/api/login', { email: f.email.value, password: f.password.value }); state.me = r.user; await boot(); go('#/'); }
-    catch (err) { fail(err); }
+    if (!f.email.value.trim()) return showErr('Escriba su usuario o correo.', 'email');
+    if (!f.password.value) return showErr('Escriba su contraseña.', 'password');
+    const b = $('#lbtn'); b.disabled = true; b.textContent = 'Entrando…';
+    try {
+      const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+        body: JSON.stringify({ email: f.email.value.trim(), password: f.password.value, remember: f.remember.checked }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showErr(j.error || 'No se pudo iniciar sesión.', j.field); return; }
+      state.me = j.user; await boot(); go('#/');
+    } catch (_) { showErr('No hay conexión con el servidor. Revise su internet e intente de nuevo.'); }
+    finally { b.disabled = false; b.textContent = 'Entrar'; }
+  };
+  $('#forgot').onclick = () => { f.hidden = true; ff.hidden = false; ff.identifier.value = f.email.value.trim(); ff.identifier.focus(); };
+  $('#back').onclick = () => { ff.hidden = true; f.hidden = false; $('#fmsg').hidden = true; f.email.focus(); };
+  ff.onsubmit = async e => {
+    e.preventDefault(); const m = $('#fmsg');
+    try { const r = await POST('/api/password/forgot', { identifier: ff.identifier.value }); m.textContent = r.message; m.className = 'login-msg ' + (r.ok ? 'ok' : 'warn'); m.hidden = false; }
+    catch (x) { m.textContent = x.message; m.className = 'login-msg warn'; m.hidden = false; }
+  };
+  setTimeout(() => f.email.focus(), 30);
+}
+/** Pantalla para crear la nueva contraseña (primer ingreso con contraseña temporal). */
+function viewChangePassword() {
+  $('#app').innerHTML = String(html`<div class="login">
+    ${loginHero(raw(`Hola, <span class="gold">${esc(String(state.me.name).split(' ')[0])}</span>`), 'Por seguridad, antes de continuar debe reemplazar la contraseña temporal que le entregaron por una personal que solo usted conozca.')}
+    <section class="panel"><form id="cp" novalidate>
+      <h2>Cree su contraseña</h2>
+      <p class="muted small">${state.me.username ? `Usuario: ${state.me.username} · ` : ''}${state.me.email}</p>
+      <div class="login-err" id="cerr" role="alert" hidden></div>
+      ${pwField('current', 'Contraseña temporal (la que le dieron)', 'current-password')}
+      ${pwField('password', 'Nueva contraseña', 'new-password')}
+      ${pwField('password2', 'Repita la nueva contraseña', 'new-password')}
+      <div class="caps small" hidden>⚠ Bloq Mayús está activado</div>
+      <ul class="rules" id="rules"></ul>
+      <button class="btn primary" style="width:100%;padding:11px">Guardar y entrar</button>
+      <p style="text-align:center;margin:14px 0 0"><button type="button" class="btn link" id="cpout">Salir</button></p>
+    </form></section></div>`);
+  const f = $('#cp'); bindPw(f);
+  const draw = () => { const pw = f.password.value; $('#rules').innerHTML = String(html`${pwRules(pw).map(([ok, t]) => html`<li class="${ok ? 'ok' : ''}">${ok ? '✓' : '○'} ${t}</li>`)}<li class="${pw && pw === f.password2.value ? 'ok' : ''}">${pw && pw === f.password2.value ? '✓' : '○'} Las dos coinciden</li>`); };
+  f.password.oninput = f.password2.oninput = draw; draw();
+  $('#cpout').onclick = async () => { await POST('/api/logout').catch(() => {}); state.me = null; go('#/login'); };
+  f.onsubmit = async e => {
+    e.preventDefault(); const er = $('#cerr');
+    const bad = pwRules(f.password.value).find(r => !r[0]);
+    const msg = !f.current.value ? 'Escriba la contraseña temporal.' : bad ? `La nueva contraseña necesita: ${bad[1].toLowerCase()}.` : f.password.value !== f.password2.value ? 'Las dos contraseñas nuevas no coinciden.' : null;
+    if (msg) { er.textContent = msg; er.hidden = false; return; }
+    try { await POST('/api/account/password', { current: f.current.value, password: f.password.value }); state.me.must_change = false; toast('Contraseña guardada. ¡Bienvenido!'); await boot(); go('#/'); }
+    catch (x) { er.textContent = x.message; er.hidden = false; }
   };
 }
+function myAccountModal() {
+  const m = modal('Mi cuenta', html`<p class="small muted">${state.me.name} · ${state.me.username ? state.me.username + ' · ' : ''}${state.me.email}</p>
+    <h3>Cambiar contraseña</h3>
+    ${pwField('current', 'Contraseña actual', 'current-password')}
+    ${pwField('password', 'Nueva contraseña', 'new-password')}
+    ${pwField('password2', 'Repita la nueva contraseña', 'new-password')}
+    <div class="caps small" hidden>⚠ Bloq Mayús está activado</div>
+    <p class="small muted">Mínimo 8 caracteres, con letras y números.</p>`, {
+    submitLabel: 'Cambiar contraseña',
+    submit: async d => { if (d.password !== d.password2) throw new Error('Las dos contraseñas nuevas no coinciden.'); await POST('/api/account/password', { current: d.current, password: d.password }); toast('Contraseña actualizada'); },
+  });
+  bindPw(m.form);
+}
 async function viewInvite(token) {
-  $('#app').innerHTML = '<div class="boot">Verificando invitación…</div>';
+  $('#app').innerHTML = '<div class="boot">Verificando enlace…</div>';
   try {
     const inv = await GET('/api/invite/' + token);
-    $('#app').innerHTML = String(html`<div class="login"><section class="hero"><div><span class="logo-card"><img src="/brand/logo.png" alt="LegalTax Consultores SRL"></span></div>
-      <div><h1>Bienvenido, <span class="gold">${inv.name}</span></h1><p>Cree su contraseña para acceder de forma segura a sus expedientes, cotizaciones, pagos y documentos.</p></div><div></div></section>
-      <section class="panel"><form id="if"><h2>Activar acceso</h2><p class="muted small">${inv.email}</p>
-      <label class="f">Nueva contraseña (mínimo 8 caracteres)<input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
-      <label class="f">Confirmar contraseña<input name="password2" type="password" required autocomplete="new-password"></label>
-      <button class="btn primary" style="width:100%">Activar cuenta</button></form></section></div>`);
-    $('#if').onsubmit = async e => {
-      e.preventDefault(); const f = e.target;
-      if (f.password.value !== f.password2.value) return toast('Las contraseñas no coinciden', true);
+    const reset = inv.reset;
+    $('#app').innerHTML = String(html`<div class="login">
+      ${loginHero(raw(`${reset ? 'Hola' : 'Bienvenido'}, <span class="gold">${esc(inv.name)}</span>`), reset ? 'Cree una nueva contraseña para volver a entrar a LegalTax.' : 'Cree su contraseña para acceder de forma segura a LegalTax.')}
+      <section class="panel"><form id="if" novalidate><h2>${reset ? 'Nueva contraseña' : 'Activar acceso'}</h2>
+      <p class="muted small">${inv.username ? `Usuario: ${inv.username} · ` : ''}${inv.email}</p>
+      <div class="login-err" id="ierr" role="alert" hidden></div>
+      ${pwField('password', 'Nueva contraseña', 'new-password')}
+      ${pwField('password2', 'Repita la contraseña', 'new-password')}
+      <div class="caps small" hidden>⚠ Bloq Mayús está activado</div>
+      <ul class="rules" id="rules"></ul>
+      <button class="btn primary" style="width:100%;padding:11px">${reset ? 'Guardar y entrar' : 'Activar cuenta'}</button></form></section></div>`);
+    const f = $('#if'); bindPw(f);
+    const draw = () => { const pw = f.password.value; $('#rules').innerHTML = String(html`${pwRules(pw).map(([ok, t]) => html`<li class="${ok ? 'ok' : ''}">${ok ? '✓' : '○'} ${t}</li>`)}<li class="${pw && pw === f.password2.value ? 'ok' : ''}">${pw && pw === f.password2.value ? '✓' : '○'} Las dos coinciden</li>`); };
+    f.password.oninput = f.password2.oninput = draw; draw();
+    f.onsubmit = async e => {
+      e.preventDefault(); const er = $('#ierr');
+      const bad = pwRules(f.password.value).find(r => !r[0]);
+      if (bad || f.password.value !== f.password2.value) { er.textContent = bad ? `La contraseña necesita: ${bad[1].toLowerCase()}.` : 'Las contraseñas no coinciden.'; er.hidden = false; return; }
       try { await POST('/api/invite/' + token, { password: f.password.value }); await POST('/api/login', { email: inv.email, password: f.password.value }); location.hash = '#/'; await boot(); }
-      catch (err) { fail(err); }
+      catch (x) { er.textContent = x.message; er.hidden = false; }
     };
-  } catch (e) { $('#app').innerHTML = String(html`<div class="boot"><div class="card" style="max-width:420px"><h2>Invitación no válida</h2><p>${e.message}</p><a class="btn" href="#/login">Ir al inicio de sesión</a></div></div>`); }
+  } catch (e) { $('#app').innerHTML = String(html`<div class="boot"><div class="card" style="max-width:420px"><h2>Enlace no válido</h2><p>${e.message}</p><a class="btn" href="#/login">Ir al inicio de sesión</a></div></div>`); }
 }
 
 // ═════════════════════════ PANEL INTERNO
@@ -515,6 +614,17 @@ route(/^\/clientes\/(\d+)$/, async (el, [id], q) => {
     ...payActs(), ...invActs(),
   });
 });
+function genTempPw() {
+  const w = ['Ley', 'Caso', 'Acta', 'Norma', 'Firma', 'Folio', 'Sello', 'Toga'];
+  const r = n => Math.floor(Math.random() * n);
+  return `${w[r(w.length)]}${1000 + r(9000)}${w[r(w.length)]}`;
+}
+function showCredentials(name, user, pw) {
+  const text = `Acceso a LegalTax\nUsuario: ${user}\nContraseña temporal: ${pw}\nAl entrar, el sistema le pedirá crear su propia contraseña.`;
+  modal('Datos de acceso', html`<p>Entregue estos datos a <b>${name}</b>. La contraseña temporal no se vuelve a mostrar.</p>
+    <dl class="dl" style="grid-template-columns:1fr 1fr;margin:10px 0"><div><dt>Usuario</dt><dd><code>${user}</code></dd></div><div><dt>Contraseña temporal</dt><dd><code>${pw}</code></dd></div></dl>
+    <button type="button" class="btn" id="cpcred">Copiar datos</button>`, { onMount: f => { $('#cpcred', f).onclick = () => { navigator.clipboard?.writeText(text.replace(/\\n/g, '\n')); toast('Datos copiados'); }; } });
+}
 function showLink(link) {
   modal('Enlace de invitación', html`<p>Comparta este enlace con el usuario. Es personal y vence en 7 días.</p><div class="copy"><input readonly value="${link}" id="lnk"><button type="button" class="btn" id="cp">Copiar</button></div>`,
     { onMount: f => { $('#cp', f).onclick = () => { $('#lnk', f).select(); navigator.clipboard?.writeText(link); toast('Enlace copiado'); }; } });
@@ -1163,9 +1273,15 @@ route(/^\/admin$/, async (el, _, q) => {
   const tabs = [['usuarios', 'Usuarios y roles'], ['membrete', 'Membrete y logo'], ['plantillas', 'Plantillas'], ['numeracion', 'Numeración'], ['correo', 'Correo'], ['tipos', 'Tipos de documento'], ['auditoria', 'Auditoría'], ['respaldo', 'Copias de seguridad']];
   let body = ''; let data;
   if (tab === 'usuarios') { data = await GET('/api/users'); body = html`<div class="actions" style="margin-bottom:12px"><button class="btn primary" data-act="newuser">+ Nuevo usuario del equipo</button></div><div class="card flush">${table([
-    { h: 'Nombre', v: r => html`<b>${r.name}</b><div class="small muted">${r.email}</div>` }, { h: 'Rol', v: r => html`${L.role[r.role]}${r.client_name ? html`<div class="small muted">${r.client_name}</div>` : ''}` },
-    { h: 'Estado', v: r => !r.active ? html`<span class="b bad">Inactivo</span>` : r.activated ? html`<span class="b ok">Activo</span>` : html`<span class="b warn">Invitado</span>` }, { h: 'Último acceso', v: r => fdt(r.last_login) || '—' },
-    { h: '', v: r => html`<span class="actions"><button class="btn sm" data-act="reinvite" data-id="${r.id}">Enlace de acceso</button>${r.role !== 'cliente' ? html`<button class="btn sm" data-act="role" data-id="${r.id}" data-role="${r.role}">Cambiar rol</button>` : ''}<button class="btn sm ${r.active ? 'danger' : ''}" data-act="active" data-id="${r.id}" data-v="${r.active ? '' : '1'}">${r.active ? 'Desactivar' : 'Activar'}</button></span>` }], data)}</div>
+    { h: 'Nombre', v: r => html`<b>${r.name}</b><div class="small muted">${r.email}</div>` }, { h: 'Usuario', v: r => r.username ? html`<code>${r.username}</code>` : html`<span class="muted">—</span>` },
+    { h: 'Rol', v: r => html`${L.role[r.role]}${r.client_name ? html`<div class="small muted">${r.client_name}</div>` : ''}` },
+    { h: 'Estado', v: r => html`${!r.active ? html`<span class="b bad">Inactivo</span>` : r.locked ? html`<span class="b bad">Bloqueado</span>` : !r.activated ? html`<span class="b warn">Invitado</span>` : r.must_change_password ? html`<span class="b warn">Debe cambiar contraseña</span>` : html`<span class="b ok">Activo</span>`}` },
+    { h: 'Último acceso', v: r => fdt(r.last_login) || '—' },
+    { h: '', v: r => html`<span class="actions">${r.locked ? html`<button class="btn sm primary" data-act="unlock" data-id="${r.id}">Desbloquear</button>` : ''}
+      <button class="btn sm" data-act="temppw" data-id="${r.id}" data-name="${r.name}" data-user="${r.username || r.email}">Contraseña temporal</button>
+      <button class="btn sm" data-act="reinvite" data-id="${r.id}">Enlace de acceso</button>
+      ${r.role !== 'cliente' ? html`<button class="btn sm" data-act="edituser" data-id="${r.id}" data-name="${r.name}" data-username="${r.username || ''}" data-role="${r.role}">Editar</button>` : ''}
+      <button class="btn sm ${r.active ? 'danger' : ''}" data-act="active" data-id="${r.id}" data-v="${r.active ? '' : '1'}">${r.active ? 'Desactivar' : 'Activar'}</button></span>` }], data)}</div>
     <div class="card small"><h3>Permisos por rol</h3><ul style="margin:0;padding-left:18px"><li><b>Administración:</b> todo, incluidos usuarios, plantillas, membrete, numeración y auditoría.</li>
     <li><b>Equipo de expedientes:</b> clientes, expedientes, actuaciones, archivos, agenda, solicitudes, cotizaciones e informes.</li>
     <li><b>Cobros:</b> cotizaciones, validación y rechazo de vouchers, recibos, anulaciones, estados de cuenta y cuentas por cobrar.</li>
@@ -1246,9 +1362,25 @@ npm run restore -- backups/legaltax-AAAAMMDD-HHMM.tar.gz</pre>
   const mf = $('#mf'); if (mf) mf.onsubmit = async e => { e.preventDefault(); const d = formData(mf); if (!d.pass) delete d.pass; try { await PUT('/api/email/config', d); toast('Configuración de correo guardada'); render(); } catch (err) { fail(err); } };
   const af = $('#af'); if (af) af.onsubmit = e => { e.preventDefault(); go('#/admin?tab=auditoria&' + qs(formData(af))); };
   act(el, {
-    newuser: () => modal('Nuevo usuario del equipo', html`<div class="row"><label class="f">Nombre<input name="name" required></label><label class="f">Correo<input name="email" type="email" required></label></div>
-      <label class="f">Rol<select name="role">${opts({ admin: 'Administración', expedientes: 'Equipo de expedientes', cobros: 'Cobros' }, 'expedientes')}</select></label>`,
-    { submit: async d => { const r = await POST('/api/users', d); showLink(r.invite_link); state.staff = await GET('/api/staff'); render(); } }),
+    newuser: () => { const m = modal('Nuevo usuario del equipo', html`<div class="row"><label class="f">Nombre completo<input name="name" required></label><label class="f">Correo<input name="email" type="email" required></label></div>
+      <div class="row"><label class="f">Usuario para entrar (opcional)<input name="username" placeholder="ej.: jperez" autocapitalize="none"></label>
+      <label class="f">Rol<select name="role">${opts({ admin: 'Administración', expedientes: 'Equipo de expedientes', cobros: 'Cobros' }, 'expedientes')}</select></label></div>
+      <label class="f">Acceso<select name="mode"><option value="temp">Contraseña temporal (se la entrega usted; deberá cambiarla al entrar)</option><option value="link">Enlace de invitación (la persona crea su contraseña)</option></select></label>
+      <label class="f" id="tpw" style="margin-top:8px">Contraseña temporal<input name="temp_password" value="${genTempPw()}"></label>`,
+    { submit: async d => {
+      const r = await POST('/api/users', { name: d.name, email: d.email, username: d.username, role: d.role, temp_password: d.mode === 'temp' ? d.temp_password : null });
+      state.staff = await GET('/api/staff'); render();
+      if (r.invite_link) showLink(r.invite_link); else showCredentials(r.name, r.username || r.email, r.temp_password);
+    } });
+      m.form.mode.onchange = () => { $('#tpw', m.form).hidden = m.form.mode.value !== 'temp'; }; },
+    temppw: d => modal('Contraseña temporal', html`<p>Asigne una contraseña temporal a <b>${d.name}</b>. Al entrar, el sistema le pedirá cambiarla. Esto también desbloquea el usuario.</p>
+      <label class="f">Contraseña temporal<input name="password" value="${genTempPw()}"></label>`,
+    { submitLabel: 'Asignar', submit: async x => { await POST(`/api/users/${d.id}/temp-password`, x); render(); showCredentials(d.name, d.user, x.password); } }),
+    unlock: async d => { await POST(`/api/users/${d.id}/unlock`); toast('Usuario desbloqueado'); render(); },
+    edituser: d => modal('Editar usuario', html`<label class="f">Nombre<input name="name" value="${d.name}"></label>
+      <label class="f" style="margin-top:8px">Usuario para entrar<input name="username" value="${d.username}" autocapitalize="none"></label>
+      <label class="f" style="margin-top:8px">Rol<select name="role">${opts({ admin: 'Administración', expedientes: 'Equipo de expedientes', cobros: 'Cobros' }, d.role)}</select></label>`,
+    { submit: async x => { await PATCH('/api/users/' + d.id, { name: x.name, role: x.role, ...(x.username ? { username: x.username } : {}) }); state.staff = await GET('/api/staff'); toast('Usuario actualizado'); render(); } }),
     reinvite: async d => { if (!confirm('Se generará un enlace nuevo para crear o restablecer la contraseña. ¿Continuar?')) return; const r = await POST(`/api/users/${d.id}/invite`, { reset: false }); showLink(r.invite_link); },
     role: d => modal('Cambiar rol', html`<select name="role">${opts({ admin: 'Administración', expedientes: 'Equipo de expedientes', cobros: 'Cobros' }, d.role)}</select>`, { submit: async x => { await PATCH('/api/users/' + d.id, x); render(); } }),
     active: async d => { await PATCH('/api/users/' + d.id, { active: !!d.v }); render(); },
