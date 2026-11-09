@@ -1358,6 +1358,38 @@ app.get('/api/folders/:clientId/zip', auth(...STAFF), wrap(async (req, res) => {
   await zip.finalize();
 }));
 
+// ───────── consulta de RNC / cédula en la DGII (autocompletar el nombre del cliente)
+const DGII = require('./dgii');
+const dgiiRate = new Map();
+let padronJob = { running: false, log: [], last: null, error: null };
+app.get('/api/dgii/rnc/:num', auth(...STAFF), wrap(async (req, res) => {
+  const k = req.user.id; const now = Date.now(); const r = (dgiiRate.get(k) || []).filter(t => now - t < 60e3);
+  if (r.length >= 40) return res.status(429).json({ error: 'Demasiadas consultas a la DGII en un minuto. Espere un momento.' });
+  r.push(now); dgiiRate.set(k, r);
+  res.json(await withCtx(SYSTEM, c => DGII.lookup(c, req.params.num)));
+}));
+app.get('/api/dgii/status', auth('admin'), wrap(async (req, res) => {
+  const q = (await pool.query("SELECT (SELECT count(*)::int FROM dgii_padron) AS padron, (SELECT max(updated_at) FROM dgii_padron) AS padron_date, (SELECT count(*)::int FROM dgii_cache) AS cache")).rows[0];
+  res.json({ ...q, job: padronJob, rnc_url: DGII.RNC_URL, padron_url: DGII.PADRON_URL });
+}));
+app.post('/api/dgii/padron', auth('admin'), wrap(async (req, res) => {
+  if (padronJob.running) return res.json({ ok: true, job: padronJob });
+  padronJob = { running: true, log: ['Iniciando…'], last: null, error: null, started: new Date().toISOString() };
+  DGII.importPadron(pool, m => { padronJob.log.push(m); padronJob.log = padronJob.log.slice(-8); })
+    .then(n => { padronJob.last = new Date().toISOString(); padronJob.count = n; })
+    .catch(e => { padronJob.error = e.message; })
+    .finally(() => { padronJob.running = false; });
+  await db(req, c => A(c, req, 'actualizar_padron', 'dgii', 'padron', null, null));
+  res.json({ ok: true, job: padronJob });
+}));
+// Diagnóstico: consulta en vivo sin usar caché ni padrón (para comprobar la conexión con la DGII desde el servidor)
+app.post('/api/dgii/test', auth('admin'), wrap(async (req, res) => {
+  const num = DGII.digitsOf(req.body.rnc || '133195054');
+  await pool.query('DELETE FROM dgii_cache WHERE rnc = $1', [num]);
+  try { const r = await withCtx(SYSTEM, c => DGII.lookup(c, num)); res.json({ ok: r.source === 'dgii', result: r }); }
+  catch (e) { res.json({ ok: false, error: e.message }); }
+}));
+
 // ───────── contabilidad: formatos fiscales, declaraciones por período, accesos y reporte mensual
 const MONTHS_ES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const periodLabel = p => (/^\d{4}-\d{2}$/.test(p) ? `${MONTHS_ES[Number(p.slice(5)) - 1]} ${p.slice(0, 4)}` : `Año fiscal ${p}`);
@@ -1744,7 +1776,7 @@ app.use((err, req, res, next) => {
   else if (err.code === '23505') { status = 409; msg = 'Ya existe un registro con esos datos (duplicado)'; }
   else if (err.code === '42501') { status = 403; msg = 'No autorizado'; }
   else if (err.code === '23514' || err.code === '22P02' || err.code === '22007' || err.code === '22008') { status = 400; msg = 'Datos inválidos: revise los campos'; }
-  if (status >= 500) { console.error(err); msg = 'Error interno del servidor'; }
+  if (status >= 500 && !err.status) { console.error(err); msg = 'Error interno del servidor'; } // los errores con estado propio (p. ej. 502 de la DGII o del correo) muestran su mensaje
   res.status(status).json({ error: msg });
 });
 

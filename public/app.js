@@ -547,7 +547,8 @@ function clientForm(c = {}) {
   return html`<div class="row">
     <label class="f">Tipo<select name="kind">${opts({ empresa: 'Empresa', persona: 'Persona física' }, c.kind || 'empresa')}</select></label>
     <label class="f">Tipo de identificación<select name="id_type">${opts(L.idt, c.id_type || 'rnc')}</select></label>
-    <label class="f">Cédula / RNC<input name="id_number" required value="${c.id_number || ''}" placeholder="1-31-12345-6"></label></div>
+    <label class="f">Cédula / RNC<span class="rncwrap"><input name="id_number" required value="${c.id_number || ''}" placeholder="RNC (9 dígitos) o cédula (11)" inputmode="numeric" autocomplete="off"><button type="button" class="btn sm" data-dgii title="Buscar en la DGII">🔎 DGII</button></span></label></div>
+    <div class="dgii-msg" id="dgiimsg" hidden></div>
     <div class="row"><label class="f wide">Nombre o razón social<input name="name" required value="${c.name || ''}"></label></div>
     <div class="row"><label class="f">Nombre comercial<input name="trade_name" value="${c.trade_name || ''}"></label>
     <label class="f">Representante<input name="representative" value="${c.representative || ''}"></label>
@@ -556,6 +557,36 @@ function clientForm(c = {}) {
     <label class="f">Responsable interno<select name="responsible_user_id">${optList(state.staff, c.responsible_user_id, 'Sin asignar')}</select></label></div>
     <div class="row"><label class="f wide">Dirección<input name="address" value="${c.address || ''}"></label></div>
     <div class="row"><label class="f wide">Notas internas<textarea name="notes">${c.notes || ''}</textarea></label></div>`;
+}
+// Consulta del RNC / cédula en la DGII: completa el nombre del cliente automáticamente
+const fmtId = d => (d.length === 9 ? `${d[0]}-${d.slice(1, 3)}-${d.slice(3, 8)}-${d[8]}` : d.length === 11 ? `${d.slice(0, 3)}-${d.slice(3, 10)}-${d[10]}` : d);
+function bindRncLookup(f, isNew) {
+  const inp = f.id_number, msg = $('#dgiimsg', f); let timer = null, lastQ = '', autoName = '';
+  const show = (cls, h) => { msg.className = 'dgii-msg ' + cls; msg.innerHTML = String(h); msg.hidden = false; };
+  const run = async (manual) => {
+    const d = inp.value.replace(/\D/g, '');
+    if (d.length !== 9 && d.length !== 11) { if (manual) show('warn', html`Escriba un RNC de 9 dígitos o una cédula de 11.`); return; }
+    if (d === lastQ && !manual) return; lastQ = d;
+    if (isNew) { f.id_type.value = d.length === 9 ? 'rnc' : 'cedula'; if (d.length === 9) f.kind.value = 'empresa'; }
+    show('info', html`🔎 Buscando ${fmtId(d)} en la DGII…`);
+    try {
+      const r = await GET('/api/dgii/rnc/' + d);
+      if (inp.value.replace(/\D/g, '') !== d) return; // el usuario siguió escribiendo
+      if (!r.found) { show('warn', html`La DGII no tiene registrado ${fmtId(d)}. Revise el número o escriba el nombre manualmente.`); return; }
+      if (!f.name.value.trim() || f.name.value === autoName || manual) { f.name.value = r.name; autoName = r.name; }
+      if (r.trade_name && !f.trade_name.value.trim()) f.trade_name.value = r.trade_name;
+      if (isNew && /^\d+$/.test(inp.value)) inp.value = fmtId(d);
+      const st = String(r.status || '');
+      const src = { dgii: 'Consulta en línea a la DGII', cache: 'DGII (consultado recientemente)', padron: 'Padrón oficial de la DGII' }[r.source] || 'DGII';
+      show(st && !/^activo/i.test(st) ? 'bad' : 'ok', html`<b>✔ ${r.name}</b>${r.trade_name ? html` · ${r.trade_name}` : ''}<br>
+        <span class="small">${st ? html`Estado: <b>${st}</b>` : ''}${r.activity ? html` · ${r.activity}` : ''}${r.regime ? html` · ${r.regime}` : ''}</span>
+        ${st && !/^activo/i.test(st) ? html`<br><span class="small">⚠ El contribuyente no figura como ACTIVO en la DGII.</span>` : ''}
+        <br><span class="small muted">${src}. El nombre se completó automáticamente; puede corregirlo.</span>`);
+    } catch (e) { show('warn', html`${e.message}`); }
+  };
+  inp.addEventListener('input', () => { clearTimeout(timer); const d = inp.value.replace(/\D/g, ''); if (d.length === 9 || d.length === 11) timer = setTimeout(() => run(false), 450); });
+  inp.addEventListener('blur', () => run(false));
+  $('[data-dgii]', f).onclick = () => { lastQ = ''; run(true); };
 }
 route(/^\/clientes$/, async (el, _, q) => {
   const rows = await GET('/api/clients?' + qs({ q: q.q }));
@@ -567,7 +598,7 @@ route(/^\/clientes$/, async (el, _, q) => {
     rows, { onRow: true, empty: 'Aún no hay clientes registrados.' })}</div>`);
   bindRows(el, rows, r => go('#/clientes/' + r.id));
   $('#cf').onsubmit = e => { e.preventDefault(); go('#/clientes?' + qs(formData(e.target))); };
-  act(el, { new: () => modal('Nuevo cliente', clientForm(), { submit: async d => { const c = await POST('/api/clients', d); toast('Cliente registrado'); go('#/clientes/' + c.id); } }) });
+  act(el, { new: () => modal('Nuevo cliente', clientForm(), { onMount: f => bindRncLookup(f, true), submit: async d => { const c = await POST('/api/clients', d); toast('Cliente registrado'); go('#/clientes/' + c.id); } }) });
 });
 
 route(/^\/clientes\/(\d+)$/, async (el, [id], q) => {
@@ -604,7 +635,7 @@ route(/^\/clientes\/(\d+)$/, async (el, [id], q) => {
   if (tab === 'cotizaciones') bindRows(el, d.quotes, r => go('#/cotizaciones/' + r.id));
   bindGendocs(el);
   act(el, {
-    edit: () => modal('Editar cliente', clientForm(c), { submit: async x => { await PATCH('/api/clients/' + id, x); toast('Cliente actualizado'); render(); } }),
+    edit: () => modal('Editar cliente', clientForm(c), { onMount: f => bindRncLookup(f, false), submit: async x => { await PATCH('/api/clients/' + id, x); toast('Cliente actualizado'); render(); } }),
     newcase: () => caseModal({ client_id: id }),
     invite: () => modal('Invitar al portal', html`<p class="small muted">Se generará un enlace de invitación válido por 7 días. Envíelo al cliente por correo o WhatsApp.</p>
       <div class="row"><label class="f">Nombre<input name="name" required value="${c.representative || c.name}"></label><label class="f">Correo<input name="email" type="email" required value="${c.email || ''}"></label></div>`,
@@ -1370,7 +1401,7 @@ route(/^\/mis-facturas$/, async el => {
 // ───── administración
 route(/^\/admin$/, async (el, _, q) => {
   const tab = q.tab || 'usuarios';
-  const tabs = [['usuarios', 'Usuarios y roles'], ['membrete', 'Membrete y logo'], ['plantillas', 'Plantillas'], ['numeracion', 'Numeración'], ['correo', 'Correo'], ['tipos', 'Tipos de documento'], ['fiscales', 'Formatos fiscales'], ['auditoria', 'Auditoría'], ['respaldo', 'Copias de seguridad']];
+  const tabs = [['usuarios', 'Usuarios y roles'], ['membrete', 'Membrete y logo'], ['plantillas', 'Plantillas'], ['numeracion', 'Numeración'], ['correo', 'Correo'], ['tipos', 'Tipos de documento'], ['fiscales', 'Formatos fiscales'], ['dgii', 'Consulta DGII'], ['auditoria', 'Auditoría'], ['respaldo', 'Copias de seguridad']];
   let body = ''; let data;
   if (tab === 'usuarios') { data = await GET('/api/users'); body = html`<div class="actions" style="margin-bottom:12px"><button class="btn primary" data-act="newuser">+ Nuevo usuario del equipo</button></div><div class="card flush">${table([
     { h: 'Nombre', v: r => html`<b>${r.name}</b><div class="small muted">${r.email}</div>` }, { h: 'Usuario', v: r => r.username ? html`<code>${r.username}</code>` : html`<span class="muted">—</span>` },
@@ -1386,7 +1417,21 @@ route(/^\/admin$/, async (el, _, q) => {
     <li><b>Equipo de expedientes:</b> clientes, expedientes, actuaciones, archivos, agenda, solicitudes, cotizaciones e informes.</li>
     <li><b>Cobros:</b> cotizaciones, validación y rechazo de vouchers, recibos, anulaciones, estados de cuenta y cuentas por cobrar.</li>
     <li><b>Cliente:</b> solo sus casos publicados, cotizaciones, cuotas, vouchers, solicitudes y PDF compartidos.</li></ul></div>`; }
-  if (!['usuarios', 'auditoria', 'respaldo', 'correo', 'tipos', 'fiscales'].includes(tab)) data = await GET('/api/settings');
+  if (!['usuarios', 'auditoria', 'respaldo', 'correo', 'tipos', 'fiscales', 'dgii'].includes(tab)) data = await GET('/api/settings');
+  if (tab === 'dgii') {
+    data = await GET('/api/dgii/status'); const j = data.job || {};
+    body = html`<div class="grid g2"><div class="card"><h2>Consulta en línea</h2>
+      <p class="small">Al registrar un cliente, el sistema busca el RNC o la cédula en la página de consultas de la DGII y completa el nombre.</p>
+      <p class="small muted"><span class="path">${data.rnc_url}</span></p>
+      <form id="dt" class="filters"><label class="f">RNC o cédula de prueba<input name="rnc" value="1-33-19505-4"></label><div><button class="btn primary">Probar consulta</button></div></form>
+      <div id="dtres"></div></div>
+      <div class="card"><h2>Padrón oficial de RNC (respaldo)</h2>
+      <p class="small">Si la página de la DGII no responde, se usa el listado oficial de contribuyentes que publica la DGII. En el servidor se actualiza solo cada domingo.</p>
+      <dl class="dl"><div><dt>Contribuyentes en el padrón</dt><dd>${Number(data.padron).toLocaleString('en-US')}</dd></div><div><dt>Última actualización</dt><dd>${data.padron_date ? fdt(data.padron_date) : 'Nunca'}</dd></div>
+        <div><dt>Consultas en caché (30 días)</dt><dd>${data.cache}</dd></div></dl>
+      ${j.running ? html`<div class="alert info" style="margin-top:10px">Actualizando… ${j.log?.slice(-1)[0] || ''}</div>` : j.error ? html`<div class="alert bad" style="margin-top:10px">Última actualización falló: ${j.error}</div>` : ''}
+      <button class="btn" data-act="padron" style="margin-top:10px" ${j.running ? 'disabled' : ''}>Actualizar padrón ahora</button></div></div>`;
+  }
   if (tab === 'fiscales') {
     data = await GET('/api/tax/formats?all=1');
     body = html`<div class="alert info">Fechas límite de cada formato. Mensuales: día del mes siguiente al período. Anuales: fecha del año siguiente (MM-DD). “Por defecto” = se activa automáticamente en las empresas nuevas.</div>
@@ -1472,6 +1517,10 @@ npm run restore -- backups/legaltax-AAAAMMDD-HHMM.tar.gz</pre>
   const ff = $('#ff'); if (ff) ff.onsubmit = async e => { e.preventDefault(); try { await PUT('/api/settings/firm', formData(ff)); toast('Membrete actualizado'); const m = await GET('/api/me'); state.firm = m.firm; } catch (err) { fail(err); } };
   const lgf = $('#lgf'); if (lgf) lgf.onsubmit = async e => { e.preventDefault(); try { await api('POST', '/api/settings/logo', new FormData(lgf)); toast('Logo actualizado'); state.firm.has_logo = true; $('#shell')?.remove(); render(); } catch (err) { fail(err); } };
   $$('[data-tpl]', el).forEach(f => f.onsubmit = async e => { e.preventDefault(); try { await PUT('/api/templates/' + f.dataset.tpl, formData(f)); toast('Plantilla guardada'); } catch (err) { fail(err); } });
+  const dt = $('#dt'); if (dt) dt.onsubmit = async e => { e.preventDefault(); const out = $('#dtres'); out.innerHTML = '<p class="small muted">Consultando la DGII…</p>';
+    try { const r = await POST('/api/dgii/test', formData(dt)); out.innerHTML = String(r.ok ? html`<div class="alert ok">✔ Conexión con la DGII funcionando: <b>${r.result.name}</b> (${r.result.status || 'sin estado'})</div>`
+      : r.result ? html`<div class="alert warn">La página de la DGII no respondió; se usó: ${r.result.source === 'padron' ? 'el padrón local' : r.result.source} → ${r.result.found ? r.result.name : 'no encontrado'}</div>` : html`<div class="alert bad">✘ ${r.error}</div>`); }
+    catch (err) { out.innerHTML = String(html`<div class="alert bad">✘ ${err.message}</div>`); } };
   const nf = $('#nf'); if (nf) nf.onsubmit = async e => { e.preventDefault(); try { await POST('/api/tax/formats', formData(nf)); toast('Formato agregado'); render(); } catch (err) { fail(err); } };
   const dtf = $('#dtf'); if (dtf) dtf.onsubmit = async e => { e.preventDefault(); try { await POST('/api/doc-types', formData(dtf)); state.docTypes = await GET('/api/doc-types'); toast('Tipo agregado'); render(); } catch (err) { fail(err); } };
   const mf = $('#mf'); if (mf) mf.onsubmit = async e => { e.preventDefault(); const d = formData(mf); if (!d.pass) delete d.pass; try { await PUT('/api/email/config', d); toast('Configuración de correo guardada'); render(); } catch (err) { fail(err); } };
@@ -1500,6 +1549,7 @@ npm run restore -- backups/legaltax-AAAAMMDD-HHMM.tar.gz</pre>
     role: d => modal('Cambiar rol', html`<select name="role">${opts({ admin: 'Administración', expedientes: 'Equipo de expedientes', cobros: 'Cobros' }, d.role)}</select>`, { submit: async x => { await PATCH('/api/users/' + d.id, x); render(); } }),
     active: async d => { await PATCH('/api/users/' + d.id, { active: !!d.v }); render(); },
     mtest: async () => { const to = prompt('¿A qué correo envío la prueba?', state.mail?.inbox || ''); if (!to) return; await POST('/api/email/test', { to }); toast('Correo de prueba enviado a ' + to); render(); },
+    padron: async () => { await POST('/api/dgii/padron'); toast('Actualización del padrón iniciada; puede tardar unos minutos'); setTimeout(() => render(), 1500); },
     savefmt: async (d, b) => { const tr = b.closest('tr'); const v = k => $(`[data-k=${k}]`, tr); await PUT('/api/tax/formats/' + d.code, { name: v('name').value, frequency: v('frequency').value, due_day: v('due_day').value, ...(v('annual_due').value ? { annual_due: v('annual_due').value } : {}), default_on: v('default_on').checked, active: v('active').checked }); toast('Formato guardado'); },
     savetype: async (d, b) => { const tr = b.closest('tr'); const v = k => $(`[data-k=${k}]`, tr); await PATCH('/api/doc-types/' + d.id, { name: v('name').value, category: v('category').value, active: v('active').checked }); state.docTypes = await GET('/api/doc-types'); toast('Tipo guardado'); },
     rmlogo: async () => { await api('DELETE', '/api/settings/logo'); state.firm.has_logo = false; $('#shell')?.remove(); render(); },

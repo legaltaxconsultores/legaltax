@@ -26,7 +26,8 @@
     "nodemailer": "^10.4.0",
     "pdfkit": "^0.20.2",
     "pg": "^8.23.1",
-    "smtp-server": "^3.21.3"
+    "smtp-server": "^3.21.3",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "mailparser": "^3.14.2"

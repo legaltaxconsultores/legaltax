@@ -430,6 +430,10 @@ CREATE TABLE IF NOT EXISTS client_credentials (
   updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- ───────── Consulta de RNC en la DGII: caché de consultas y padrón oficial ─────────
+CREATE TABLE IF NOT EXISTS dgii_cache (rnc text PRIMARY KEY, data jsonb NOT NULL, fetched_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS dgii_padron (rnc text PRIMARY KEY, name text, trade_name text, activity text, status text, regime text, updated_at timestamptz NOT NULL DEFAULT now());
+
 -- ───────── Seguridad a nivel de fila (RLS) ─────────
 -- Personal: acceso completo. Cliente: solo sus registros y solo lo publicado.
 DO $$

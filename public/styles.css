@@ -224,3 +224,10 @@ input.bad { border-color: var(--bad); outline: 2px solid rgba(179,38,30,.2); }
 .cred .kv { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .cred .kv > span:first-child { width: 52px; }
 .cred code { background: #fff; border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; overflow-wrap: anywhere; }
 .fmts { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px 16px; }
+
+/* consulta DGII */
+.rncwrap { display: flex; gap: 6px; } .rncwrap input { flex: 1; min-width: 0; }
+.dgii-msg { border-radius: 8px; padding: 9px 12px; margin: -4px 0 12px; font-size: .9rem; line-height: 1.45; }
+.dgii-msg.ok { background: var(--ok-bg); color: var(--ok); } .dgii-msg.info { background: var(--info-bg); color: var(--info); }
+.dgii-msg.warn { background: var(--warn-bg); color: var(--warn); } .dgii-msg.bad { background: var(--bad-bg); color: var(--bad); }
+.dgii-msg .muted { color: inherit; opacity: .75; }

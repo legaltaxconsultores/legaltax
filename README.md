@@ -104,6 +104,20 @@ Cada expediente tiene la pestaña **📂 Documentos escaneados**:
 
 En producción hay que servir la app detrás de HTTPS (Nginx o Caddy) y cambiar las contraseñas de demostración.
 
+## Consulta de RNC en la DGII
+
+Al registrar un cliente, basta con escribir el **RNC** (9 dígitos) o la **cédula** (11).
+
+- **Qué completa:** el sistema consulta la DGII y llena el **nombre o razón social** y el **nombre comercial**. Además muestra el **estado** (avisa si no está ACTIVO), la actividad económica y el régimen, y pone el RNC con formato (1-31-99999-8). También hay un botón **🔎 DGII** para repetir la consulta.
+- **Fuente 1, consulta en línea:** la página de consultas de RNC de la DGII.
+- **Fuente 2, padrón oficial de RNC** (`DGII_RNC.zip`, que publica la DGII): se usa si la página no responde o cambia. El instalador lo descarga y lo actualiza **cada domingo**; también se puede actualizar en *Configuración → Consulta DGII*.
+- **Caché:** cada RNC consultado se guarda 30 días, para no repetir consultas.
+- **Diagnóstico:** *Configuración → Consulta DGII* tiene el botón **Probar consulta**, que verifica la conexión con la DGII desde el servidor.
+
+Si no hay conexión ni padrón, el sistema lo indica y el nombre se escribe a mano.
+
+Prueba automática (con una imitación local de la DGII): `node test/dgii.js`.
+
 ## Contabilidad
 
 Menú **📊 Contabilidad**.

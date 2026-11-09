@@ -158,8 +158,11 @@ chmod +x /usr/local/bin/legaltax-actualizar
 cat > /etc/cron.d/legaltax-backup <<CRON
 CRON_TZ=America/Santo_Domingo
 40 2 * * * legaltax bash -c 'set -a; . $ENV_FILE; set +a; cd $APP_DIR && bash scripts/backup.sh' >> $DATA_DIR/backups/backup.log 2>&1
+10 3 * * 0 legaltax bash -c 'set -a; . $ENV_FILE; set +a; cd $APP_DIR && node scripts/padron-dgii.js' >> $DATA_DIR/backups/padron-dgii.log 2>&1
 CRON
 c_ok "Copia de seguridad diaria programada (2:40 a. m.) en $DATA_DIR/backups"
+c_ok "Padrón de RNC de la DGII: se actualiza cada domingo (respaldo de la consulta en vivo)"
+( su -s /bin/bash legaltax -c "set -a; . $ENV_FILE; set +a; cd $APP_DIR && node scripts/padron-dgii.js" >> $DATA_DIR/backups/padron-dgii.log 2>&1 & ) || true
 
 if [ "$TEST_MODE" = 1 ]; then
   c_ok "Modo prueba: se omiten el servicio, el firewall y HTTPS"
