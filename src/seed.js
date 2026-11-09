@@ -15,7 +15,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 async function main() {
   if (process.argv.includes('--reset')) {
-    await pool.query(`DROP TABLE IF EXISTS api_tokens, notices, invoices, email_log, doc_types, audit_log, saved_queries, generated_docs, doc_requests, payments, installments, quote_items, quotes, documents,
+    await pool.query(`DROP TABLE IF EXISTS client_credentials, client_tax_formats, tax_filings, tax_formats, api_tokens, notices, invoices, email_log, doc_types, audit_log, saved_queries, generated_docs, doc_requests, payments, installments, quote_items, quotes, documents,
       deadlines, case_events, cases, templates, doc_sequences, settings, users, clients, session CASCADE`);
     fs.rmSync(S.FILES, { recursive: true, force: true }); fs.mkdirSync(S.FILES, { recursive: true });
     console.log('Base de datos y archivos reiniciados.');
@@ -60,6 +60,24 @@ async function main() {
       ['Declaración jurada IR-1 / IR-2', 'declaracion'], ['Declaración IT-1 (ITBIS)', 'declaracion'], ['Formato 606 / 607', 'declaracion'], ['Estados financieros', 'estado_financiero'],
       ['Factura / comprobante fiscal', 'otro'], ['Estado de cuenta bancario', 'otro'], ['Recibo de pago', 'otro'], ['Correspondencia', 'correspondencia'], ['Otro', 'otro']];
     for (const [i, [n, cat]] of types.entries()) await c.query('INSERT INTO doc_types (name, category, position) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING', [n, cat, i]);
+    // Formatos y declaraciones fiscales (DGII / TSS). Las fechas límite se pueden ajustar en Configuración → Formatos fiscales.
+    const formats = [
+      ['606', 'Formato 606 — Compras de bienes y servicios', 'mensual', 15, null, true],
+      ['607', 'Formato 607 — Ventas de bienes y servicios', 'mensual', 15, null, true],
+      ['608', 'Formato 608 — Comprobantes anulados', 'mensual', 15, null, false],
+      ['609', 'Formato 609 — Pagos al exterior', 'mensual', 15, null, false],
+      ['IT-1', 'IT-1 — Declaración y pago del ITBIS', 'mensual', 20, null, true],
+      ['IR-3', 'IR-3 — Retenciones de asalariados', 'mensual', 10, null, false],
+      ['IR-17', 'IR-17 — Otras retenciones y retribuciones complementarias', 'mensual', 10, null, false],
+      ['ANT', 'Anticipos del Impuesto sobre la Renta', 'mensual', 15, null, false],
+      ['TSS', 'TSS — Autodeterminación de la nómina', 'mensual', 3, null, false],
+      ['IR-1', 'IR-1 — Declaración jurada de personas físicas', 'anual', 31, '03-31', false],
+      ['IR-2', 'IR-2 — Declaración jurada de sociedades', 'anual', 30, '04-30', true],
+    ];
+    for (const [i, [code, name, freq, day, ann, def]] of formats.entries())
+      await c.query('INSERT INTO tax_formats (code, name, frequency, due_day, annual_due, default_on, position) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (code) DO NOTHING', [code, name, freq, day, ann, def, i]);
+    for (const n of ['Formato 606', 'Formato 607', 'Formato 608', 'Formato 609', 'Acuse de envío DGII', 'Declaración IR-3', 'Declaración IR-17', 'Declaración IR-2', 'Declaración IR-1', 'Autodeterminación TSS'])
+      await c.query("INSERT INTO doc_types (name, category, position) VALUES ($1, 'declaracion', 50) ON CONFLICT (name) DO NOTHING", [n]);
     if (!DEMO) {
       // Producción: solo la cuenta de Administración del despacho (la contraseña sale de ADMIN_PASSWORD).
       const exists = (await c.query('SELECT 1 FROM users WHERE lower(email) = $1', [ADMIN_EMAIL])).rowCount;

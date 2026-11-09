@@ -14,6 +14,7 @@ const LABELS = {
   ficha_cliente: 'Ficha de cliente',
   ficha_expediente: 'Ficha de expediente',
   factura: 'Factura',
+  reporte_contable: 'Reporte contable mensual',
 };
 
 function fill(text, vars) {
@@ -267,6 +268,20 @@ function render(docType, data, settings, template, opts = {}) {
         kv([['Fecha de emisión', dateStr(data.issue_date)], ['Fecha de vencimiento', dateStr(data.due_date)], ['Expediente', data.case?.code], ['Estado al emitir', data.status_label]], 4);
         if (tpl.terms) { h2('Forma de pago'); para(fill(tpl.terms, vars), { size: 8.5 }); }
         if (tpl.closing) para(fill(tpl.closing, vars), { size: 8, color: MUTED });
+        break;
+      }
+      case 'reporte_contable': {
+        h2(`Declaraciones de ${data.period_label}`);
+        const t = data.totals;
+        kv([['Empresas', String(data.rows.length)], ['Declaraciones', String(t.total)], ['Enviadas', String(t.enviado)], ['Sin movimiento', String(t.sin_movimiento)],
+          ['Pendientes', String(t.pendiente)], ['Vencidas', String(t.vencido)], ['No aplica', String(t.no_aplica)], ['Monto declarado', money(t.amount)]], 4);
+        para('Incluye los formatos mensuales del período y las declaraciones anuales que vencen en este mes. “Vencida” significa que pasó la fecha límite sin registrarse como enviada.', { size: 8, color: MUTED });
+        if (!data.rows.length) para('No hay empresas con formatos fiscales configurados.');
+        data.rows.forEach(r => {
+          h2(`${r.client.name} · ${r.client.id_number}`);
+          table([{ label: 'Formato', w: 60 }, { label: 'Período', w: 85 }, { label: 'Vence', w: 62 }, { label: 'Estado', w: 92 }, { label: 'Envío', w: 62 }, { label: 'No. acuse', w: 90 }, { label: 'Monto', w: 80, align: 'right' }],
+            r.items.map(i => [i.code, i.period_label, dateStr(i.due), (i.state_code === 'vencido' ? '⚠ ' : '') + i.state + (i.files ? ` · ${i.files} arch.` : ''), dateStr(i.sent_on), i.ack || '', i.amount != null ? money(i.amount) : '']));
+        });
         break;
       }
       case 'ficha_cliente': {

@@ -22,7 +22,7 @@ const round2 = n => Math.round(Number(n) * 100) / 100;
 const DOCROOT_NAME = 'Documentos LegalTax';
 const DOCROOT = path.join(STORAGE, DOCROOT_NAME);
 fs.mkdirSync(DOCROOT, { recursive: true });
-const SUB = { general: 'Documentos generales', emitidos: 'PDF emitidos', pagos: 'Pagos y vouchers' };
+const SUB = { general: 'Documentos generales', emitidos: 'PDF emitidos', pagos: 'Pagos y vouchers', contabilidad: 'Contabilidad' };
 const safeName = (s, max = 90) => String(s || '').normalize('NFC').replace(/[\\/:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max).replace(/[. ]+$/, '') || 'Sin nombre';
 const stamp = () => todayISO();
 
@@ -43,11 +43,12 @@ async function caseFolder(c, caseId) {
   return name;
 }
 /** Carpeta relativa (dentro de STORAGE) para un cliente / expediente / subcarpeta; la crea si no existe. */
-async function docFolder(c, { clientId, caseId, sub }) {
+async function docFolder(c, { clientId, caseId, sub, sub2 }) {
   const parts = [DOCROOT_NAME, await clientFolder(c, clientId)];
   if (caseId) parts.push(await caseFolder(c, caseId));
   if (sub) parts.push(SUB[sub] || safeName(sub));
   else if (!caseId) parts.push(SUB.general);
+  if (sub2) parts.push(safeName(sub2));
   const rel = parts.join('/');
   fs.mkdirSync(path.join(STORAGE, rel), { recursive: true });
   return rel;

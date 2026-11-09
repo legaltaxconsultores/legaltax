@@ -89,7 +89,7 @@ function modal(title, body, { wide, submit, submitLabel = 'Guardar', footer, onM
     try { const r = await submit(formData(form), form); if (r !== false) close(); } catch (err) { fail(err); } finally { btn.disabled = false; }
   });
   onMount && onMount(form, close);
-  const first = $('input:not([type=hidden]),select,textarea', form); first && setTimeout(() => first.focus(), 30);
+  const first = $('input:not([type=hidden]),select,textarea', form); first && setTimeout(() => { if (!form.contains(document.activeElement)) first.focus(); }, 30);
   return { el, close, form };
 }
 function viewPdf(url, title = 'Documento') {
@@ -206,7 +206,7 @@ function shell() {
   const me = state.me; const isClient = me.role === 'cliente';
   if ($('#shell') && $('#shell').dataset.role === me.role) { markNav(); return; }
   const staffNav = [
-    ['#/', '⌂', 'Inicio'], ['#/consultas', '⌕', 'Consultas'], ['#/clientes', '◉', 'Clientes'], ['#/expedientes', '▤', 'Expedientes'], ['#/carpetas', '📁', 'Carpetas'],
+    ['#/', '⌂', 'Inicio'], ['#/consultas', '⌕', 'Consultas'], ['#/clientes', '◉', 'Clientes'], ['#/expedientes', '▤', 'Expedientes'], ['#/carpetas', '📁', 'Carpetas'], ['#/contabilidad', '📊', 'Contabilidad'],
     ['#/agenda', '◷', 'Agenda y vencimientos'], ['#/cotizaciones', '✎', 'Cotizaciones'], ['#/facturas', '🧾', 'Facturas'], ['#/pagos', '$', 'Vouchers y pagos'],
     ['#/solicitudes', '⇪', 'Solicitudes de documentos'], ['#/documentos', '⎙', 'Documentos PDF'],
   ];
@@ -421,6 +421,7 @@ route(/^\/$/, async el => {
       <a class="kpi" href="#/consultas?entity=receivables"><div class="v" style="font-size:1.25rem">${money(k.receivable)}</div><div class="l">Saldo por cobrar</div></a>
       <a class="kpi" href="#/solicitudes"><div class="v">${k.requests}</div><div class="l">Solicitudes abiertas</div></a>
       <a class="kpi ${k.invoices_overdue ? 'bad' : ''}" href="#/facturas?state=vencidas"><div class="v">${k.invoices_overdue}</div><div class="l">Facturas vencidas</div></a>
+      ${k.tax_overdue ? html`<a class="kpi ${k.tax_overdue.n ? 'warn' : ''}" href="#/contabilidad?period=${k.tax_overdue.period}"><div class="v">${k.tax_overdue.n}</div><div class="l">Declaraciones de ${k.tax_overdue.label} sin enviar</div></a>` : ''}
     </div>
     <div class="grid g2">
       <div class="card flush"><h2>Próximos vencimientos</h2>${table([
@@ -597,7 +598,7 @@ route(/^\/clientes\/(\d+)$/, async (el, [id], q) => {
     <div class="actions" style="margin-top:12px"><button class="btn primary" data-act="invite">+ Invitar al portal</button></div></div>`;
   el.innerHTML = String(html`${head(c.name, `${L.idt[c.id_type]} ${c.id_number} · ${c.kind === 'empresa' ? 'Empresa' : 'Persona física'}`,
     html`${can('admin', 'expedientes') ? html`<button class="btn" data-act="edit">Editar</button><button class="btn" data-act="newcase">+ Expediente</button>` : ''}
-      <a class="btn" href="#/cotizaciones/nueva?client_id=${id}">+ Cotización</a><a class="btn" href="#/carpetas/${id}">📁 Carpeta</a><button class="btn" data-act="msg">💬 Aviso / WhatsApp</button><button class="btn gold" data-act="pdf">⎙ Generar PDF</button>`, html`<a href="#/clientes">Clientes</a> ›`)}
+      <a class="btn" href="#/cotizaciones/nueva?client_id=${id}">+ Cotización</a><a class="btn" href="#/carpetas/${id}">📁 Carpeta</a><a class="btn" href="#/contabilidad/${id}">📊 Contabilidad</a><button class="btn" data-act="msg">💬 Aviso / WhatsApp</button><button class="btn gold" data-act="pdf">⎙ Generar PDF</button>`, html`<a href="#/clientes">Clientes</a> ›`)}
     <div class="tabs">${tabs.map(([k, l]) => html`<a href="#/clientes/${id}?tab=${k}" class="${k === tab ? 'active' : ''}">${l}</a>`)}</div>${body}`);
   if (tab === 'expedientes') bindRows(el, d.cases, r => go('#/expedientes/' + r.id));
   if (tab === 'cotizaciones') bindRows(el, d.quotes, r => go('#/cotizaciones/' + r.id));
@@ -834,20 +835,119 @@ route(/^\/carpetas\/(\d+)$/, async (el, [cid]) => {
       ${card(`#/carpetas/${cid}/general`, 'Documentos generales', `${d.counts.general} documento(s) · identificación, contratos, poderes…`)}
       ${card(`#/carpetas/${cid}/emitidos`, 'PDF emitidos', `${d.counts.emitidos} documento(s) · cotizaciones, recibos, estados de cuenta, facturas`)}
       ${card(`#/carpetas/${cid}/pagos`, 'Pagos y vouchers', `${d.counts.pagos} comprobante(s) de pago`)}
+      ${card(`#/carpetas/${cid}/contabilidad`, 'Contabilidad', `${d.counts.contabilidad} archivo(s) · 606, 607, IT-1, IR-2… por mes`)}
     </div>`);
 });
-route(/^\/carpetas\/(\d+)\/(case-\d+|general|emitidos|pagos)$/, async (el, [cid, fk], q) => {
+route(/^\/carpetas\/(\d+)\/(case-\d+|general|emitidos|pagos|contabilidad)$/, async (el, [cid, fk], q) => {
   const d = await GET(`/api/folders/${cid}?f=${fk}`); const cl = d.client; const f = d.folder;
   const canUp = f.canUpload && can('admin', 'expedientes', 'cobros');
   el.innerHTML = String(html`${head(f.name, html`<span class="path">${ROOT_NAME} / ${cl.folder_name} / ${f.name}</span>`,
     html`${f.case ? html`<a class="btn" href="#/expedientes/${f.case.id}">Abrir expediente</a>` : ''}<a class="btn gold" href="/api/folders/${cid}/zip?f=${fk}">⤓ Descargar esta carpeta (ZIP)</a>`,
     html`<a href="#/carpetas">📁 ${ROOT_NAME}</a> › <a href="#/carpetas/${cid}">${cl.folder_name}</a> ›`)}
-    ${fk === 'emitidos' || fk === 'pagos' ? '' : scansView(f.documents, q.tipo, canUp, { title: 'Cargar documentos a esta carpeta', where: `${ROOT_NAME} / ${cl.folder_name} / ${f.name}` })}
+    ${fk === 'contabilidad' ? html`<div class="actions" style="margin-bottom:12px"><a class="btn primary" href="#/contabilidad/${cid}">📊 Abrir ficha contable (cargar declaraciones)</a></div>${scansView(f.documents, q.tipo, false, { empty: 'Aún no hay declaraciones cargadas. Se cargan desde la ficha contable del cliente.' })}` : ''}
+    ${fk === 'emitidos' || fk === 'pagos' || fk === 'contabilidad' ? '' : scansView(f.documents, q.tipo, canUp, { title: 'Cargar documentos a esta carpeta', where: `${ROOT_NAME} / ${cl.folder_name} / ${f.name}` })}
     ${fk === 'pagos' ? scansView(f.documents, q.tipo, false, { empty: 'No hay comprobantes de pago.' }) : ''}
     ${f.gendocs.length || fk === 'emitidos' ? html`<div class="card flush"><h2>📁 PDF emitidos ${f.case ? 'del expediente' : ''} <span class="b">${f.gendocs.length}</span></h2>${gendocsTable(f.gendocs)}</div>` : ''}`);
   bindGendocs(el);
   if (canUp) bindScanUploader(el, `/api/folders/${cid}/upload`, { case_id: f.case ? f.case.id : null });
   act(el, { editscan: x => editScanModal(f.documents.find(y => String(y.id) === x.id)), viewgd: x => viewPdf(gdUrl(x.id)) });
+});
+
+// ───── contabilidad: accesos, declaraciones por mes (606, 607, IT-1, IR-2…) y reporte mensual
+const TAX_TONE = { enviado: 'ok', sin_movimiento: 'info', no_aplica: '', pendiente: 'warn', vencido: 'bad' };
+const TAX_STATUS = { enviado: 'Enviado', sin_movimiento: 'Sin movimiento (en cero)', no_aplica: 'No aplica', pendiente: 'Pendiente' };
+const TAX_ICON = { enviado: '✓', sin_movimiento: '0', no_aplica: '—', pendiente: '•', vencido: '!' };
+const MES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+const prevMonth = () => { const [y, m] = today().split('-').map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`; };
+async function filingModal({ clientId, clientName, format, period, periodLabel, filing, cases, due }) {
+  const fl = filing || {};
+  const m = modal(`${format.code} · ${periodLabel}`, html`<p class="small muted" style="margin-top:0">${clientName} · ${format.name} · vence ${fdate(due)}</p>
+    <div class="row"><label class="f">Estado<select name="status">${opts(TAX_STATUS, fl.status || 'enviado')}</select></label>
+      <label class="f">Fecha de envío<input type="date" name="sent_on" value="${fl.sent_on || today()}"></label>
+      <label class="f">No. de acuse / confirmación<input name="ack_number" value="${fl.ack_number || ''}"></label>
+      <label class="f">Monto declarado o a pagar (RD$)<input name="amount" inputmode="decimal" value="${fl.amount ?? ''}" placeholder="0.00"></label></div>
+    <label class="f">Alimentar expediente (opcional)<select name="case_id">${optList(cases, fl.case_id, 'Ninguno — solo carpeta Contabilidad', x => `${x.code} — ${x.title}`)}</select></label>
+    <label class="f" style="margin-top:8px">Archivos (TXT o Excel del formato, acuse de recibo DGII, constancia de pago…)<input type="file" name="files" multiple></label>
+    ${fl.files?.length ? html`<div style="margin-top:8px"><span class="small muted">Archivos ya cargados:</span>${fl.files.map(f => html`<div class="small">📎 <a href="/api/files/${f.id}?inline=1" target="_blank" rel="noopener">${f.filename}</a> <span class="muted">· ${fdt(f.created_at)}</span></div>`)}</div>` : ''}
+    <label class="f" style="margin-top:8px">Notas<textarea name="notes" rows="2">${fl.notes || ''}</textarea></label>
+    ${fl.updated_by_name ? html`<p class="small muted">Última actualización: ${fl.updated_by_name} · ${fdt(fl.updated_at)}</p>` : ''}`,
+  { wide: true, submitLabel: 'Guardar', submit: async (d, f) => {
+    const fd = new FormData(f); fd.append('format_code', format.code); fd.append('period', period);
+    const r = await api('POST', `/api/tax/clients/${clientId}/filing`, fd);
+    toast(`${format.code} ${periodLabel} guardado${r.files ? ` con ${r.files} archivo(s)` : ''}`); render();
+  } });
+  return m;
+}
+route(/^\/contabilidad$/, async (el, _, q) => {
+  const period = /^\d{4}-\d{2}$/.test(q.period || '') ? q.period : prevMonth();
+  const [ov, clients] = await Promise.all([GET('/api/tax/overview?period=' + period), GET('/api/clients')]);
+  const t = ov.totals;
+  el.innerHTML = String(html`${head('Contabilidad', `Declaraciones de ${ov.label}: 606, 607, IT-1, IR-3, IR-17 y anuales que vencen en el mes. Haga clic en un formato para registrarlo y cargar sus archivos.`,
+    html`<a class="btn" href="/api/tax/report?period=${period}&format=xlsx">⤓ Excel</a><button class="btn gold" data-act="pdf">⎙ Reporte del mes (PDF)</button>`)}
+    <div class="card"><form id="pf" class="filters"><label class="f">Mes declarado<input type="month" name="period" value="${period}"></label><div><button class="btn">Ver mes</button></div>
+      <label class="f">Ficha contable de una empresa<select id="goc">${optList(clients, '', 'Seleccione…', x => `${x.name} (${x.id_number})`)}</select></label></form></div>
+    <div class="kpis"><div class="kpi"><div class="v">${t.total}</div><div class="l">Declaraciones del mes</div></div><div class="kpi"><div class="v">${t.enviado}</div><div class="l">Enviadas</div></div>
+      <div class="kpi"><div class="v">${t.sin_movimiento}</div><div class="l">Sin movimiento</div></div><div class="kpi warn"><div class="v">${t.pendiente}</div><div class="l">Pendientes</div></div>
+      <div class="kpi ${t.vencido ? 'bad' : ''}"><div class="v">${t.vencido}</div><div class="l">Vencidas</div></div><div class="kpi"><div class="v" style="font-size:1.15rem">${money(t.amount)}</div><div class="l">Monto declarado</div></div></div>
+    <div class="card flush">${ov.rows.length ? html`<table class="tbl stack"><thead><tr><th>Empresa</th><th>Declaraciones de ${ov.label}</th></tr></thead><tbody>${ov.rows.map(r => html`<tr>
+      <td data-l="Empresa"><a href="#/contabilidad/${r.client.id}"><b>${r.client.name}</b></a><div class="small muted">${r.client.id_number}</div></td>
+      <td data-l=""><div class="chips">${r.items.map(i => html`<button type="button" class="tchip ${TAX_TONE[i.state.code]}" data-act="filing" data-client="${r.client.id}" data-code="${i.code}" data-period="${i.period}" title="${i.name} · ${i.period_label} · vence ${fdate(i.state.due)}">
+        <b>${i.code}</b> ${TAX_ICON[i.state.code]} ${i.state.label}${i.files ? ` · 📎${i.files}` : ''}</button>`)}</div></td></tr>`)}</tbody></table>`
+      : html`<div class="empty">No hay declaraciones para ${ov.label}. Configure los formatos de cada empresa en su ficha contable.</div>`}</div>
+    <p class="small muted">Las fechas límite son las habituales de la DGII (606/607/608/609 el día 15, IT-1 el 20, IR-3/IR-17 el 10, IR-2 el 30 de abril…). Administración puede ajustarlas en Configuración → Formatos fiscales.</p>`);
+  $('#pf').onsubmit = e => { e.preventDefault(); go('#/contabilidad?' + qs(formData(e.target))); };
+  $('#goc').onchange = e => e.target.value && go('#/contabilidad/' + e.target.value);
+  act(el, {
+    pdf: () => viewPdf(`/api/tax/report?period=${period}&inline=1`, `Reporte contable · ${ov.label}`),
+    filing: async x => {
+      const d = await GET(`/api/tax/clients/${x.client}?year=${x.period.slice(0, 4)}`);
+      const g = d.grid.find(r => r.format.code === x.code); const cell = g.cells.find(c => c.period === x.period);
+      filingModal({ clientId: x.client, clientName: d.client.name, format: g.format, period: x.period, periodLabel: cell.label, filing: cell.filing, cases: d.cases, due: cell.state.due });
+    },
+  });
+});
+route(/^\/contabilidad\/(\d+)$/, async (el, [cid], q) => {
+  const year = Number(q.year) || Number(today().slice(0, 4));
+  const d = await GET(`/api/tax/clients/${cid}?year=${year}`); const cl = d.client;
+  const monthly = d.grid.filter(g => g.format.frequency === 'mensual'); const annual = d.grid.filter(g => g.format.frequency === 'anual');
+  const cell = (g, c) => html`<button type="button" class="tcell ${TAX_TONE[c.state.code]}" data-act="filing" data-code="${g.format.code}" data-period="${c.period}" title="${g.format.code} · ${c.label}: ${c.state.label}${c.filing?.ack_number ? ' · acuse ' + c.filing.ack_number : ''} · vence ${fdate(c.state.due)}">${TAX_ICON[c.state.code]}${c.filing?.files?.length ? html`<span class="clip">📎</span>` : ''}</button>`;
+  el.innerHTML = String(html`${head(`Contabilidad · ${cl.name}`, html`${cl.id_type === 'rnc' ? 'RNC' : 'Cédula'} ${cl.id_number} · <span class="path">${ROOT_NAME} / ${cl.folder_name || cl.name} / Contabilidad</span>`,
+    html`<a class="btn" href="#/contabilidad/${cid}?year=${year - 1}">← ${year - 1}</a><a class="btn" href="#/contabilidad/${cid}?year=${year + 1}">${year + 1} →</a><a class="btn" href="#/carpetas/${cid}/contabilidad">📁 Carpeta</a><a class="btn" href="#/clientes/${cid}">Ficha del cliente</a>`,
+    html`<a href="#/contabilidad">📊 Contabilidad</a> ›`)}
+    <div class="card"><div class="page-head" style="margin:0 0 10px"><h2 style="margin:0">🔐 Accesos de la empresa</h2><button class="btn sm primary" data-act="newcred">+ Agregar acceso</button></div>
+      ${d.credentials.length ? html`<div class="creds">${d.credentials.map(x => html`<div class="cred">
+        <div class="row" style="margin:0;align-items:center"><b>${x.platform}</b>${x.url ? html`<a class="small" href="${x.url}" target="_blank" rel="noopener">Abrir ↗</a>` : ''}</div>
+        <div class="kv"><span class="muted small">Usuario</span><code>${x.username || '—'}</code>${x.username ? html`<button class="btn link small" data-act="copy" data-v="${x.username}">Copiar</button>` : ''}</div>
+        <div class="kv"><span class="muted small">Clave</span><code data-secret="${x.id}">${x.has_secret ? '••••••••' : '—'}</code>${x.has_secret ? html`<button class="btn link small" data-act="reveal" data-id="${x.id}">Mostrar</button><button class="btn link small" data-act="copysecret" data-id="${x.id}">Copiar</button>` : ''}</div>
+        ${x.notes ? html`<div class="small muted">${x.notes}</div>` : ''}
+        <div class="small muted">Actualizado ${fdt(x.updated_at)}${x.updated_by_name ? ' · ' + x.updated_by_name : ''}</div>
+        <div class="actions"><button class="btn sm" data-act="editcred" data-id="${x.id}">Editar</button>${can('admin') ? html`<button class="btn sm danger" data-act="delcred" data-id="${x.id}">Eliminar</button>` : ''}</div></div>`)}</div>`
+      : html`<p class="muted small" style="margin:0">Guarde aquí los accesos de la Oficina Virtual de la DGII, TSS, bancos u otras plataformas de esta empresa. Las claves se guardan cifradas y cada vez que alguien las ve queda registrado.</p>`}</div>
+    <div class="card flush"><div class="page-head" style="margin:0;padding:14px 18px 0"><h2>Declaraciones ${year}</h2><span class="legend small">${Object.entries({ enviado: 'Enviado', sin_movimiento: 'Sin movimiento', pendiente: 'Pendiente', vencido: 'Vencido', no_aplica: 'No aplica' }).map(([k, l]) => html`<span class="tcell ${TAX_TONE[k]} mini">${TAX_ICON[k]}</span> ${l} `)}</span></div>
+      ${monthly.length ? html`<div style="overflow-x:auto"><table class="tbl taxgrid"><thead><tr><th>Formato</th>${MES.map(m => html`<th class="c">${m}</th>`)}</tr></thead>
+        <tbody>${monthly.map(g => html`<tr><td><b>${g.format.code}</b><div class="small muted">${g.format.name.split('—')[1] || g.format.name}</div></td>${g.cells.map(c => html`<td class="c">${cell(g, c)}</td>`)}</tr>`)}</tbody></table></div>` : html`<div class="empty">No hay formatos mensuales configurados.</div>`}
+      ${annual.length ? html`<div style="padding:12px 18px"><h3>Anuales (año fiscal ${year})</h3><div class="chips">${annual.map(g => { const c = g.cells[0]; return html`<button type="button" class="tchip ${TAX_TONE[c.state.code]}" data-act="filing" data-code="${g.format.code}" data-period="${c.period}"><b>${g.format.code}</b> ${TAX_ICON[c.state.code]} ${c.state.label} · vence ${fdate(c.state.due)}</button>`; })}</div></div>` : ''}
+    </div>
+    <div class="card"><h2>Formatos que aplican a esta empresa</h2><form id="tf"><div class="fmts">${d.formats.map(f => html`<label class="chk"><input type="checkbox" name="fmt" value="${f.code}" ${d.enabled.includes(f.code) ? 'checked' : ''}> <b>${f.code}</b>&nbsp;<span class="small muted">${f.name.split('—')[1] || f.name} · ${f.frequency === 'anual' ? 'anual' : 'mensual, vence día ' + f.due_day}</span></label>`)}</div>
+      <button class="btn sm primary" style="margin-top:10px">Guardar formatos</button></form></div>
+    <div class="actions"><button class="btn gold" data-act="pdfmonth">⎙ Reporte de un mes de esta empresa</button></div>`);
+  $('#tf').onsubmit = async e => { e.preventDefault(); const codes = $$('input[name=fmt]:checked', e.target).map(i => i.value); try { await PUT(`/api/tax/clients/${cid}/formats`, { codes }); toast('Formatos guardados'); render(); } catch (x) { fail(x); } };
+  const credForm = (x = {}) => html`<label class="f">Plataforma<input name="platform" list="plats" required value="${x.platform || ''}" placeholder="Oficina Virtual DGII"><datalist id="plats"><option>Oficina Virtual DGII</option><option>TSS — SUIR Plus</option><option>Banco (Internet Banking)</option><option>Ministerio de Trabajo</option><option>ONAPI</option><option>Cámara de Comercio</option></datalist></label>
+    <label class="f" style="margin-top:8px">Dirección web<input name="url" value="${x.url || ''}" placeholder="https://dgii.gov.do/OFV/"></label>
+    <div class="row" style="margin-top:8px"><label class="f">Usuario (RNC, cédula o usuario)<input name="username" value="${x.username || ''}" autocomplete="off"></label>
+    <label class="f">Clave ${x.id ? '(déjela vacía para no cambiarla)' : ''}<span class="pw"><input name="secret" type="password" autocomplete="new-password"><button type="button" class="eye" data-eye>👁</button></span></label></div>
+    <label class="f">Notas<input name="notes" value="${x.notes || ''}" placeholder="Ej.: token en poder del gerente; preguntas de seguridad…"></label>`;
+  const reveal = async id => (await POST(`/api/clients/${cid}/credentials/${id}/reveal`)).secret;
+  act(el, {
+    filing: x => { const g = d.grid.find(r => r.format.code === x.code); const c = g.cells.find(z => z.period === x.period); filingModal({ clientId: cid, clientName: cl.name, format: g.format, period: x.period, periodLabel: c.label, filing: c.filing, cases: d.cases, due: c.state.due }); },
+    newcred: () => { const m = modal('Nuevo acceso', credForm({ platform: 'Oficina Virtual DGII', url: 'https://dgii.gov.do/OFV/' }), { submit: async v => { await POST(`/api/clients/${cid}/credentials`, v); toast('Acceso guardado (clave cifrada)'); render(); } }); bindPw(m.form); },
+    editcred: x => { const c = d.credentials.find(y => String(y.id) === x.id); const m = modal('Editar acceso', credForm(c), { submit: async v => { if (!v.secret) delete v.secret; await PATCH(`/api/clients/${cid}/credentials/${x.id}`, v); toast('Acceso actualizado'); render(); } }); bindPw(m.form); },
+    delcred: async x => { if (!confirm('¿Eliminar este acceso?')) return; await api('DELETE', `/api/clients/${cid}/credentials/${x.id}`); render(); },
+    reveal: async (x, b) => { const code = $(`[data-secret="${x.id}"]`, el); if (b.textContent === 'Ocultar') { code.textContent = '••••••••'; b.textContent = 'Mostrar'; return; } code.textContent = await reveal(x.id); b.textContent = 'Ocultar'; setTimeout(() => { code.textContent = '••••••••'; b.textContent = 'Mostrar'; }, 30000); },
+    copy: async x => { await navigator.clipboard?.writeText(x.v); toast('Usuario copiado'); },
+    copysecret: async x => { const v = await reveal(x.id); try { await navigator.clipboard.writeText(v); toast('Clave copiada (consulta registrada)'); } catch (_) { toast('No se pudo copiar; use “Mostrar”', true); } },
+    pdfmonth: () => modal('Reporte de un mes', html`<label class="f">Mes<input type="month" name="period" value="${prevMonth()}"></label>`, { submitLabel: 'Ver reporte', submit: async v => { setTimeout(() => viewPdf(`/api/tax/report?period=${v.period}&client_id=${cid}&inline=1`, `Reporte contable · ${cl.name}`), 50); } }),
+  });
 });
 
 // ───── expedientes
@@ -1270,7 +1370,7 @@ route(/^\/mis-facturas$/, async el => {
 // ───── administración
 route(/^\/admin$/, async (el, _, q) => {
   const tab = q.tab || 'usuarios';
-  const tabs = [['usuarios', 'Usuarios y roles'], ['membrete', 'Membrete y logo'], ['plantillas', 'Plantillas'], ['numeracion', 'Numeración'], ['correo', 'Correo'], ['tipos', 'Tipos de documento'], ['auditoria', 'Auditoría'], ['respaldo', 'Copias de seguridad']];
+  const tabs = [['usuarios', 'Usuarios y roles'], ['membrete', 'Membrete y logo'], ['plantillas', 'Plantillas'], ['numeracion', 'Numeración'], ['correo', 'Correo'], ['tipos', 'Tipos de documento'], ['fiscales', 'Formatos fiscales'], ['auditoria', 'Auditoría'], ['respaldo', 'Copias de seguridad']];
   let body = ''; let data;
   if (tab === 'usuarios') { data = await GET('/api/users'); body = html`<div class="actions" style="margin-bottom:12px"><button class="btn primary" data-act="newuser">+ Nuevo usuario del equipo</button></div><div class="card flush">${table([
     { h: 'Nombre', v: r => html`<b>${r.name}</b><div class="small muted">${r.email}</div>` }, { h: 'Usuario', v: r => r.username ? html`<code>${r.username}</code>` : html`<span class="muted">—</span>` },
@@ -1286,7 +1386,21 @@ route(/^\/admin$/, async (el, _, q) => {
     <li><b>Equipo de expedientes:</b> clientes, expedientes, actuaciones, archivos, agenda, solicitudes, cotizaciones e informes.</li>
     <li><b>Cobros:</b> cotizaciones, validación y rechazo de vouchers, recibos, anulaciones, estados de cuenta y cuentas por cobrar.</li>
     <li><b>Cliente:</b> solo sus casos publicados, cotizaciones, cuotas, vouchers, solicitudes y PDF compartidos.</li></ul></div>`; }
-  if (!['usuarios', 'auditoria', 'respaldo', 'correo', 'tipos'].includes(tab)) data = await GET('/api/settings');
+  if (!['usuarios', 'auditoria', 'respaldo', 'correo', 'tipos', 'fiscales'].includes(tab)) data = await GET('/api/settings');
+  if (tab === 'fiscales') {
+    data = await GET('/api/tax/formats?all=1');
+    body = html`<div class="alert info">Fechas límite de cada formato. Mensuales: día del mes siguiente al período. Anuales: fecha del año siguiente (MM-DD). “Por defecto” = se activa automáticamente en las empresas nuevas.</div>
+      <div class="card flush">${table([{ h: 'Código', v: r => html`<b>${r.code}</b>` }, { h: 'Nombre', v: r => html`<input data-k="name" value="${r.name}">` },
+        { h: 'Frecuencia', v: r => html`<select data-k="frequency">${opts({ mensual: 'Mensual', anual: 'Anual' }, r.frequency)}</select>` },
+        { h: 'Día límite (mensual)', v: r => html`<input data-k="due_day" type="number" min="1" max="31" value="${r.due_day}" style="max-width:80px">` },
+        { h: 'Fecha anual (MM-DD)', v: r => html`<input data-k="annual_due" value="${r.annual_due || ''}" placeholder="04-30" style="max-width:90px">` },
+        { h: 'Por defecto', v: r => html`<input type="checkbox" data-k="default_on" ${r.default_on ? 'checked' : ''} style="width:auto">` },
+        { h: 'Activo', v: r => html`<input type="checkbox" data-k="active" ${r.active ? 'checked' : ''} style="width:auto">` },
+        { h: '', v: r => html`<button class="btn sm primary" data-act="savefmt" data-code="${r.code}">Guardar</button>` }], data, { cls: '' })}</div>
+      <div class="card"><h3>Agregar formato</h3><form id="nf" class="filters"><label class="f">Código<input name="code" placeholder="IR-4"></label><label class="f">Nombre<input name="name"></label>
+        <label class="f">Frecuencia<select name="frequency"><option value="mensual">Mensual</option><option value="anual">Anual</option></select></label><label class="f">Día límite<input name="due_day" type="number" value="15"></label>
+        <label class="f">Fecha anual (MM-DD)<input name="annual_due" placeholder="04-30"></label><div><button class="btn primary">Agregar</button></div></form></div>`;
+  }
   if (tab === 'tipos') {
     data = await GET('/api/doc-types?all=1');
     body = html`<div class="card"><form id="dtf" class="filters"><label class="f">Nuevo tipo de documento<input name="name" required placeholder="Ej.: Certificación de la TSS"></label>
@@ -1358,6 +1472,7 @@ npm run restore -- backups/legaltax-AAAAMMDD-HHMM.tar.gz</pre>
   const ff = $('#ff'); if (ff) ff.onsubmit = async e => { e.preventDefault(); try { await PUT('/api/settings/firm', formData(ff)); toast('Membrete actualizado'); const m = await GET('/api/me'); state.firm = m.firm; } catch (err) { fail(err); } };
   const lgf = $('#lgf'); if (lgf) lgf.onsubmit = async e => { e.preventDefault(); try { await api('POST', '/api/settings/logo', new FormData(lgf)); toast('Logo actualizado'); state.firm.has_logo = true; $('#shell')?.remove(); render(); } catch (err) { fail(err); } };
   $$('[data-tpl]', el).forEach(f => f.onsubmit = async e => { e.preventDefault(); try { await PUT('/api/templates/' + f.dataset.tpl, formData(f)); toast('Plantilla guardada'); } catch (err) { fail(err); } });
+  const nf = $('#nf'); if (nf) nf.onsubmit = async e => { e.preventDefault(); try { await POST('/api/tax/formats', formData(nf)); toast('Formato agregado'); render(); } catch (err) { fail(err); } };
   const dtf = $('#dtf'); if (dtf) dtf.onsubmit = async e => { e.preventDefault(); try { await POST('/api/doc-types', formData(dtf)); state.docTypes = await GET('/api/doc-types'); toast('Tipo agregado'); render(); } catch (err) { fail(err); } };
   const mf = $('#mf'); if (mf) mf.onsubmit = async e => { e.preventDefault(); const d = formData(mf); if (!d.pass) delete d.pass; try { await PUT('/api/email/config', d); toast('Configuración de correo guardada'); render(); } catch (err) { fail(err); } };
   const af = $('#af'); if (af) af.onsubmit = e => { e.preventDefault(); go('#/admin?tab=auditoria&' + qs(formData(af))); };
@@ -1385,6 +1500,7 @@ npm run restore -- backups/legaltax-AAAAMMDD-HHMM.tar.gz</pre>
     role: d => modal('Cambiar rol', html`<select name="role">${opts({ admin: 'Administración', expedientes: 'Equipo de expedientes', cobros: 'Cobros' }, d.role)}</select>`, { submit: async x => { await PATCH('/api/users/' + d.id, x); render(); } }),
     active: async d => { await PATCH('/api/users/' + d.id, { active: !!d.v }); render(); },
     mtest: async () => { const to = prompt('¿A qué correo envío la prueba?', state.mail?.inbox || ''); if (!to) return; await POST('/api/email/test', { to }); toast('Correo de prueba enviado a ' + to); render(); },
+    savefmt: async (d, b) => { const tr = b.closest('tr'); const v = k => $(`[data-k=${k}]`, tr); await PUT('/api/tax/formats/' + d.code, { name: v('name').value, frequency: v('frequency').value, due_day: v('due_day').value, ...(v('annual_due').value ? { annual_due: v('annual_due').value } : {}), default_on: v('default_on').checked, active: v('active').checked }); toast('Formato guardado'); },
     savetype: async (d, b) => { const tr = b.closest('tr'); const v = k => $(`[data-k=${k}]`, tr); await PATCH('/api/doc-types/' + d.id, { name: v('name').value, category: v('category').value, active: v('active').checked }); state.docTypes = await GET('/api/doc-types'); toast('Tipo guardado'); },
     rmlogo: async () => { await api('DELETE', '/api/settings/logo'); state.firm.has_logo = false; $('#shell')?.remove(); render(); },
     sample: async () => { const cl = (await GET('/api/clients'))[0]; if (!cl) return toast('Registre un cliente para ver la vista previa', true); previewPdf('ficha_cliente', { client_id: cl.id }); },

@@ -80,4 +80,4 @@ async function notifyFirm(subject, bodyHtml, firm, logoPath) {
   } catch (e) { console.warn('Aviso por correo no enviado:', e.message); }
 }
 
-module.exports = { getConfig, publicConfig, saveConfig, send, layout, logoAttachment, notifyFirm, isEmail, DEFAULTS };
+module.exports = { encrypt, decrypt, getConfig, publicConfig, saveConfig, send, layout, logoAttachment, notifyFirm, isEmail, DEFAULTS };

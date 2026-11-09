@@ -384,13 +384,59 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_logins integer NOT NULL DEFAUL
 ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until timestamptz;
 CREATE UNIQUE INDEX IF NOT EXISTS users_username_uq ON users (lower(username)) WHERE username IS NOT NULL;
 
+-- ───────── Contabilidad: formatos fiscales, declaraciones mensuales y accesos ─────────
+CREATE TABLE IF NOT EXISTS tax_formats (
+  code        text PRIMARY KEY,
+  name        text NOT NULL,
+  description text,
+  frequency   text NOT NULL DEFAULT 'mensual' CHECK (frequency IN ('mensual','anual')),
+  due_day     integer NOT NULL DEFAULT 15 CHECK (due_day BETWEEN 1 AND 31),   -- mensual: día del mes siguiente
+  annual_due  text,                                                          -- anual: 'MM-DD' del año siguiente
+  default_on  boolean NOT NULL DEFAULT false,
+  position    integer NOT NULL DEFAULT 0,
+  active      boolean NOT NULL DEFAULT true
+);
+CREATE TABLE IF NOT EXISTS client_tax_formats (
+  client_id   integer NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  format_code text NOT NULL REFERENCES tax_formats(code) ON DELETE CASCADE,
+  PRIMARY KEY (client_id, format_code)
+);
+CREATE TABLE IF NOT EXISTS tax_filings (
+  id          serial PRIMARY KEY,
+  client_id   integer NOT NULL REFERENCES clients(id),
+  format_code text NOT NULL REFERENCES tax_formats(code),
+  period      text NOT NULL CHECK (period ~ '^\d{4}(-\d{2})?$'),             -- 'AAAA-MM' (mensual) o 'AAAA' (anual)
+  status      text NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente','enviado','sin_movimiento','no_aplica')),
+  sent_on     date,
+  ack_number  text,
+  amount      numeric(14,2),
+  notes       text,
+  case_id     integer REFERENCES cases(id),
+  updated_by  integer REFERENCES users(id),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (client_id, format_code, period)
+);
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS filing_id integer REFERENCES tax_filings(id);
+CREATE TABLE IF NOT EXISTS client_credentials (
+  id          serial PRIMARY KEY,
+  client_id   integer NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  platform    text NOT NULL,
+  url         text,
+  username    text,
+  secret_enc  text,
+  notes       text,
+  updated_by  integer REFERENCES users(id),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
 -- ───────── Seguridad a nivel de fila (RLS) ─────────
 -- Personal: acceso completo. Cliente: solo sus registros y solo lo publicado.
 DO $$
 DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY['clients','cases','case_events','deadlines','documents','quotes','quote_items',
-                           'installments','payments','doc_requests','generated_docs','audit_log','saved_queries','email_log','invoices','notices'] LOOP
+                           'installments','payments','doc_requests','generated_docs','audit_log','saved_queries','email_log','invoices','notices','tax_filings','client_tax_formats','client_credentials'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS staff_all ON %I', t);
@@ -421,3 +467,6 @@ CREATE POLICY client_write ON audit_log   FOR INSERT WITH CHECK (app_role() = 'c
 CREATE POLICY client_read ON saved_queries FOR SELECT USING (false);
 CREATE POLICY client_read ON invoices FOR SELECT USING (client_id = app_client() AND status = 'emitida');
 CREATE POLICY client_read ON notices FOR SELECT USING (false);
+CREATE POLICY client_read ON tax_filings FOR SELECT USING (false);
+CREATE POLICY client_read ON client_tax_formats FOR SELECT USING (false);
+CREATE POLICY client_read ON client_credentials FOR SELECT USING (false);

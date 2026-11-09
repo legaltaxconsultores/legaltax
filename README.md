@@ -104,6 +104,33 @@ Cada expediente tiene la pestaña **📂 Documentos escaneados**:
 
 En producción hay que servir la app detrás de HTTPS (Nginx o Caddy) y cambiar las contraseñas de demostración.
 
+## Contabilidad
+
+Menú **📊 Contabilidad**.
+
+**Vista del mes**, por defecto el mes anterior, que es el que se declara:
+- muestra para cada empresa el estado de sus formatos: Enviado, Sin movimiento (en cero), Pendiente, Vencido o No aplica;
+- un clic en cualquier formato abre su registro;
+- el botón **⎙ Reporte del mes** genera un PDF con el membrete, y **Excel** exporta la misma información.
+
+**Ficha contable de cada empresa:**
+- **🔐 Accesos:** Oficina Virtual DGII, TSS, bancos y otras plataformas, con usuario y clave. La clave se guarda **cifrada** (AES-256-GCM) y solo se descifra al pulsar *Mostrar* o *Copiar*. Cada consulta queda en la auditoría (`ver_clave`) y la clave se vuelve a ocultar a los 30 segundos. Los clientes nunca ven esta sección.
+- **Declaraciones del año:** una tabla de formatos por mes (606, 607, 608, 609, IT-1, IR-3, IR-17, anticipos, TSS) y los anuales (IR-1, IR-2). Cada casilla registra:
+  - estado y fecha de envío;
+  - número de acuse y monto;
+  - notas;
+  - **archivos** (TXT o Excel del formato, acuse, constancia de pago).
+- **Alimentar un expediente:** al registrar una declaración se puede elegir un expediente del cliente. Los archivos aparecen también en sus Documentos y se registra la actuación correspondiente.
+- **Formatos que aplican:** se eligen por empresa. Las empresas nuevas empiezan con 606, 607, IT-1 e IR-2; las personas físicas, con IR-1.
+
+**Dónde quedan los archivos:** `Documentos LegalTax / <Cliente> / Contabilidad / 2026-10 Octubre /`. Se ven en *Carpetas* y se incluyen en el ZIP del cliente.
+
+**Fechas límite:** son las habituales de la DGII (606/607/608/609 el día 15, IT-1 el 20, IR-3/IR-17 el 10, IR-2 el 30 de abril, IR-1 el 31 de marzo). Se ajustan en *Configuración → Formatos fiscales*, donde también se pueden agregar formatos nuevos.
+
+**Panel de inicio:** indica cuántas declaraciones del mes anterior siguen sin enviar.
+
+Prueba automática del módulo: `node test/contabilidad.js` (16 verificaciones).
+
 ## Publicar en internet: servidor propio (sin Render)
 
 El sistema se instala en un servidor **Ubuntu 22.04 o 24.04** con **un solo comando**. Proveedores que aceptan **PayPal**:

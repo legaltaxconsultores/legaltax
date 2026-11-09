@@ -231,6 +231,7 @@ app.get('/api/dashboard', auth(...STAFF), wrap(async (req, res) => {
       vouchers: (await one("SELECT count(*)::int n FROM payments WHERE status = 'pendiente'")).n,
       requests: (await one("SELECT count(*)::int n FROM doc_requests WHERE status <> 'recibida'")).n,
       invoices_overdue: (await invoiceList(c, "i.status = 'emitida' AND i.due_date < current_date", [])).filter(x => x.state.balance > 0).length,
+      tax_overdue: await (async () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); const prev = d.toISOString().slice(0, 7); const o = await monthOverview(c, prev); return { period: prev, n: o.totals.vencido + o.totals.pendiente, label: o.label }; })(),
     };
     const rec = await one(`SELECT coalesce(sum(i.amount),0) AS billed FROM installments i JOIN quotes q ON q.id = i.quote_id WHERE q.status = 'aceptada'`);
     const paid = await one("SELECT coalesce(sum(amount_validated),0) AS paid FROM payments p JOIN quotes q ON q.id = p.quote_id WHERE p.status = 'validado' AND q.status = 'aceptada'");
@@ -1297,7 +1298,8 @@ async function folderContents(c, clientId, f) {
     FROM cases cs WHERE cs.client_id = $1 ORDER BY cs.opened_on DESC, cs.id DESC`, [clientId])).rows;
   for (const cs of cases) if (!cs.folder_name) cs.folder_name = await S.caseFolder(c, cs.id);
   const counts = (await c.query(`SELECT
-      (SELECT count(*)::int FROM documents WHERE client_id = $1 AND case_id IS NULL AND category <> 'voucher') AS general,
+      (SELECT count(*)::int FROM documents WHERE client_id = $1 AND case_id IS NULL AND category <> 'voucher' AND filing_id IS NULL) AS general,
+      (SELECT count(*)::int FROM documents WHERE client_id = $1 AND filing_id IS NOT NULL) AS contabilidad,
       (SELECT count(*)::int FROM documents WHERE client_id = $1 AND category = 'voucher') AS pagos,
       (SELECT count(*)::int FROM generated_docs WHERE client_id = $1 AND case_id IS NULL AND status <> 'reemplazado') AS emitidos`, [clientId])).rows[0];
   const out = { root: S.DOCROOT_NAME, client, cases, counts };
@@ -1310,7 +1312,8 @@ async function folderContents(c, clientId, f) {
     const cs = cases.find(x => x.id === Number(m[1])); need(cs, 'Carpeta no encontrada', 404);
     return { ...out, folder: { key: f, name: cs.folder_name, case: cs, canUpload: true, documents: await docs(`d.case_id = ${cs.id} AND d.category <> 'voucher'`), gendocs: await gds(`g.case_id = ${cs.id}`) } };
   }
-  if (f === 'general') return { ...out, folder: { key: f, name: S.SUB.general, canUpload: true, documents: await docs(`d.case_id IS NULL AND d.category <> 'voucher'`), gendocs: [] } };
+  if (f === 'general') return { ...out, folder: { key: f, name: S.SUB.general, canUpload: true, documents: await docs(`d.case_id IS NULL AND d.category <> 'voucher' AND d.filing_id IS NULL`), gendocs: [] } };
+  if (f === 'contabilidad') return { ...out, folder: { key: f, name: S.SUB.contabilidad, canUpload: false, documents: await docs('d.filing_id IS NOT NULL'), gendocs: [] } };
   if (f === 'emitidos') return { ...out, folder: { key: f, name: S.SUB.emitidos, canUpload: false, documents: [], gendocs: await gds('g.case_id IS NULL') } };
   if (f === 'pagos') return { ...out, folder: { key: f, name: S.SUB.pagos, canUpload: false, documents: await docs(`d.category = 'voucher'`), gendocs: [] } };
   throw S.httpError(404, 'Carpeta no encontrada');
@@ -1325,12 +1328,16 @@ app.get('/api/folders/:clientId/zip', auth(...STAFF), wrap(async (req, res) => {
   const clientId = int(req.params.clientId); const only = str(req.query.f);
   const entries = await db(req, async c => {
     const base = await folderContents(c, clientId);
-    const keys = only ? [only] : [...base.cases.map(x => 'case-' + x.id), 'general', 'emitidos', 'pagos'];
-    const list = [];
+    const keys = only ? [only] : [...base.cases.map(x => 'case-' + x.id), 'general', 'emitidos', 'pagos', 'contabilidad'];
+    const list = []; const seen = new Set();
     for (const k of keys) {
       const r = await folderContents(c, clientId, k);
       const caseDir = r.folder.case ? r.folder.case.folder_name : null;
-      for (const d of r.folder.documents) list.push({ file: S.filePath(d.storage_key), name: [caseDir || r.folder.name, path.basename(d.storage_key)].join('/') });
+      for (const d of r.folder.documents) {
+        if (seen.has(d.storage_key)) continue; seen.add(d.storage_key);
+        const rel = d.storage_key.startsWith(S.DOCROOT_NAME + '/') ? d.storage_key.split('/').slice(2).join('/') : [caseDir || r.folder.name, path.basename(d.storage_key)].join('/');
+        list.push({ file: S.filePath(d.storage_key), name: rel });
+      }
       for (const g of r.folder.gendocs) {
         const full = (await c.query('SELECT storage_key, void_storage_key, status FROM generated_docs WHERE id = $1', [g.id])).rows[0];
         const key = full.status === 'anulado' && full.void_storage_key ? full.void_storage_key : full.storage_key;
@@ -1349,6 +1356,207 @@ app.get('/api/folders/:clientId/zip', auth(...STAFF), wrap(async (req, res) => {
   for (const e of entries.list) if (fs.existsSync(e.file)) zip.file(e.file, { name: `${root}/${e.name}` });
   if (!entries.list.length) zip.append('Carpeta sin documentos.\n', { name: `${root}/LEEME.txt` });
   await zip.finalize();
+}));
+
+// ───────── contabilidad: formatos fiscales, declaraciones por período, accesos y reporte mensual
+const MONTHS_ES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+const periodLabel = p => (/^\d{4}-\d{2}$/.test(p) ? `${MONTHS_ES[Number(p.slice(5)) - 1]} ${p.slice(0, 4)}` : `Año fiscal ${p}`);
+const FILING_LABEL = { enviado: 'Enviado', sin_movimiento: 'Sin movimiento (en cero)', no_aplica: 'No aplica', pendiente: 'Pendiente', vencido: 'Vencido' };
+function dueDate(f, period) {
+  if (f.frequency === 'anual') { const y = Number(period.slice(0, 4)) + 1; return `${y}-${f.annual_due || '04-30'}`; }
+  let [y, m] = period.split('-').map(Number); m += 1; if (m > 12) { m = 1; y += 1; }
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${y}-${String(m).padStart(2, '0')}-${String(Math.min(f.due_day, last)).padStart(2, '0')}`;
+}
+function filingState(f, period, filing) {
+  const due = dueDate(f, period);
+  const code = filing && filing.status !== 'pendiente' ? filing.status : due < S.todayISO() ? 'vencido' : 'pendiente';
+  return { code, label: FILING_LABEL[code], due };
+}
+async function clientFormats(c, clientId) {
+  let rows = (await c.query('SELECT format_code FROM client_tax_formats WHERE client_id = $1', [clientId])).rows;
+  if (!rows.length && !(await c.query("SELECT 1 FROM audit_log WHERE entity = 'formatos_fiscales' AND client_id = $1 LIMIT 1", [clientId])).rowCount) {
+    // primera vez: formatos habituales según el tipo de cliente
+    const kind = (await c.query('SELECT kind FROM clients WHERE id = $1', [clientId])).rows[0]?.kind;
+    const defs = kind === 'persona' ? ['IR-1'] : (await c.query('SELECT code FROM tax_formats WHERE default_on AND active')).rows.map(r => r.code);
+    for (const code of defs) await c.query('INSERT INTO client_tax_formats VALUES ($1,$2) ON CONFLICT DO NOTHING', [clientId, code]);
+    rows = defs.map(format_code => ({ format_code }));
+  }
+  return rows.map(r => r.format_code);
+}
+app.get('/api/tax/formats', auth(...STAFF), wrap(async (req, res) => {
+  res.json((await pool.query(`SELECT * FROM tax_formats ${req.query.all ? '' : 'WHERE active'} ORDER BY position, code`)).rows);
+}));
+app.put('/api/tax/formats/:code', auth('admin'), wrap(async (req, res) => {
+  const f = pick(req.body, ['name', 'due_day', 'annual_due', 'active', 'default_on', 'frequency']);
+  if (f.due_day) { f.due_day = int(f.due_day); need(f.due_day >= 1 && f.due_day <= 31, 'Día límite inválido'); }
+  if (f.annual_due) need(/^\d{2}-\d{2}$/.test(f.annual_due), 'Fecha anual inválida (use MM-DD)');
+  const keys = Object.keys(f); need(keys.length, 'Sin cambios');
+  const r = (await pool.query(`UPDATE tax_formats SET ${keys.map((k, i) => `${k} = $${i + 2}`).join(', ')} WHERE code = $1 RETURNING *`, [req.params.code, ...keys.map(k => f[k])])).rows[0];
+  need(r, 'Formato no encontrado', 404); await db(req, c => A(c, req, 'editar', 'formato_fiscal', r.code, null, f)); res.json(r);
+}));
+app.post('/api/tax/formats', auth('admin'), wrap(async (req, res) => {
+  const b = req.body; const code = String(b.code || '').trim().toUpperCase();
+  need(/^[A-Z0-9-]{2,12}$/.test(code) && str(b.name), 'Indique un código (ej.: IR-4) y un nombre');
+  const r = (await pool.query(`INSERT INTO tax_formats (code, name, frequency, due_day, annual_due, position) VALUES ($1,$2,$3,$4,$5,(SELECT coalesce(max(position),0)+1 FROM tax_formats)) RETURNING *`,
+    [code, b.name.trim(), b.frequency === 'anual' ? 'anual' : 'mensual', int(b.due_day) || 15, str(b.annual_due)])).rows[0];
+  await db(req, c => A(c, req, 'crear', 'formato_fiscal', code, null, null)); res.json(r);
+}));
+// Ficha contable de un cliente: formatos que aplican y estado de cada período del año
+app.get('/api/tax/clients/:id', auth(...STAFF), wrap(async (req, res) => {
+  const clientId = int(req.params.id); const year = int(req.query.year) || Number(S.todayISO().slice(0, 4));
+  res.json(await db(req, async c => {
+    const client = (await c.query('SELECT id, name, kind, id_type, id_number, folder_name FROM clients WHERE id = $1', [clientId])).rows[0]; need(client, 'Cliente no encontrado', 404);
+    const formats = (await c.query('SELECT * FROM tax_formats WHERE active ORDER BY position, code')).rows;
+    const enabled = await clientFormats(c, clientId);
+    const filings = (await c.query(`SELECT f.*, u.name AS updated_by_name, cs.code AS case_code,
+        (SELECT json_agg(json_build_object('id', d.id, 'title', d.title, 'filename', d.filename, 'type', t.name, 'created_at', d.created_at) ORDER BY d.id) FROM documents d LEFT JOIN doc_types t ON t.id = d.doc_type_id WHERE d.filing_id = f.id) AS files
+      FROM tax_filings f LEFT JOIN users u ON u.id = f.updated_by LEFT JOIN cases cs ON cs.id = f.case_id
+      WHERE f.client_id = $1 AND (f.period LIKE $2 OR f.period = $3)`, [clientId, `${year}-%`, String(year)])).rows;
+    const byKey = Object.fromEntries(filings.map(f => [`${f.format_code}|${f.period}`, f]));
+    const grid = formats.filter(f => enabled.includes(f.code)).map(f => {
+      const periods = f.frequency === 'anual' ? [String(year)] : Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+      return { format: f, cells: periods.map(p => ({ period: p, label: periodLabel(p), filing: byKey[`${f.code}|${p}`] || null, state: filingState(f, p, byKey[`${f.code}|${p}`]) })) };
+    });
+    const cases = (await c.query('SELECT id, code, title FROM cases WHERE client_id = $1 ORDER BY opened_on DESC', [clientId])).rows;
+    const creds = (await c.query('SELECT id, platform, url, username, notes, (secret_enc IS NOT NULL) AS has_secret, updated_at, (SELECT name FROM users WHERE id = updated_by) AS updated_by_name FROM client_credentials WHERE client_id = $1 ORDER BY platform', [clientId])).rows;
+    return { client, year, formats, enabled, grid, cases, credentials: creds };
+  }));
+}));
+app.put('/api/tax/clients/:id/formats', auth(...STAFF), wrap(async (req, res) => {
+  const clientId = int(req.params.id); const codes = Array.isArray(req.body.codes) ? req.body.codes : [];
+  await db(req, async c => {
+    await c.query('DELETE FROM client_tax_formats WHERE client_id = $1', [clientId]);
+    for (const code of codes) await c.query('INSERT INTO client_tax_formats SELECT $1, code FROM tax_formats WHERE code = $2', [clientId, code]);
+    await A(c, req, 'configurar', 'formatos_fiscales', clientId, clientId, { codes });
+  });
+  res.json({ ok: true });
+}));
+// Registrar / actualizar una declaración del período, con sus archivos (acuse, TXT del 606, etc.)
+app.post('/api/tax/clients/:id/filing', auth(...UPLOADERS), uploadMany.array('files', 20), wrap(async (req, res) => {
+  const files = req.files || [];
+  try {
+    const clientId = int(req.params.id); const b = req.body;
+    need(str(b.format_code) && /^\d{4}(-\d{2})?$/.test(b.period || ''), 'Indique el formato y el período');
+    need(['pendiente', 'enviado', 'sin_movimiento', 'no_aplica'].includes(b.status), 'Seleccione el estado');
+    const out = await db(req, async c => {
+      const f = (await c.query('SELECT * FROM tax_formats WHERE code = $1', [b.format_code])).rows[0]; need(f, 'Formato no encontrado', 404);
+      need((f.frequency === 'anual') === /^\d{4}$/.test(b.period), 'El período no corresponde a la frecuencia del formato');
+      const caseId = int(b.case_id);
+      if (caseId) need((await c.query('SELECT 1 FROM cases WHERE id = $1 AND client_id = $2', [caseId, clientId])).rowCount, 'El expediente no pertenece al cliente');
+      const amount = str(b.amount) ? S.round2(String(b.amount).replace(/,/g, '')) : null;
+      const fl = (await c.query(`INSERT INTO tax_filings (client_id, format_code, period, status, sent_on, ack_number, amount, notes, case_id, updated_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (client_id, format_code, period) DO UPDATE SET status = EXCLUDED.status, sent_on = EXCLUDED.sent_on, ack_number = EXCLUDED.ack_number,
+          amount = EXCLUDED.amount, notes = EXCLUDED.notes, case_id = EXCLUDED.case_id, updated_by = EXCLUDED.updated_by, updated_at = now()
+        RETURNING *`, [clientId, f.code, b.period, b.status, str(b.sent_on), str(b.ack_number), amount, str(b.notes), caseId, req.user.id])).rows[0];
+      const typeName = { '606': 'Formato 606', '607': 'Formato 607', '608': 'Formato 608', '609': 'Formato 609', 'IT-1': 'Declaración IT-1 (ITBIS)', 'IR-3': 'Declaración IR-3', 'IR-17': 'Declaración IR-17', 'IR-2': 'Declaración IR-2', 'IR-1': 'Declaración IR-1', TSS: 'Autodeterminación TSS' }[f.code] || 'Acuse de envío DGII';
+      const t = (await c.query('SELECT * FROM doc_types WHERE name = $1', [typeName])).rows[0] || (await c.query("SELECT * FROM doc_types WHERE name = 'Otro'")).rows[0];
+      const sub2 = /^\d{4}-\d{2}$/.test(b.period) ? `${b.period} ${MONTHS_ES[Number(b.period.slice(5)) - 1]}` : `${b.period} Anual`;
+      for (const file of files) {
+        const key = await S.saveUpload(c, file.path, file.originalname, { clientId, sub: 'contabilidad', sub2, label: f.code });
+        await c.query(`INSERT INTO documents (client_id, case_id, filing_id, category, doc_type_id, title, resolution_number, institution, doc_date, storage_key, filename, mime, size_bytes, visibility, uploaded_by)
+          VALUES ($1,$2,$3,'declaracion',$4,$5,$6,$7,$8,$9,$10,$11,$12,'privado',$13)`,
+        [clientId, caseId, fl.id, t?.id || null, `${f.code} · ${periodLabel(b.period)}`, str(b.ack_number), f.code === 'TSS' ? 'TSS' : 'DGII', str(b.sent_on), key, file.originalname, file.mimetype, file.size, req.user.id]);
+      }
+      if (caseId) {
+        await c.query(`INSERT INTO case_events (case_id, client_id, kind, title, description, event_date, visibility, created_by) VALUES ($1,$2,'deposito',$3,$4,coalesce($5::date,current_date),'interna',$6)`,
+          [caseId, clientId, `${f.code} ${periodLabel(b.period)}: ${FILING_LABEL[b.status]}`, [str(b.ack_number) ? 'Acuse: ' + b.ack_number : '', amount != null ? 'Monto: ' + money(amount) : '', files.length ? files.length + ' archivo(s)' : ''].filter(Boolean).join(' · ') || null, str(b.sent_on), req.user.id]);
+      }
+      await A(c, req, 'registrar_declaracion', 'contabilidad', fl.id, clientId, { formato: f.code, periodo: b.period, estado: b.status, archivos: files.length });
+      return { ok: true, id: fl.id, files: files.length };
+    });
+    res.json(out);
+  } finally { cleanTmp(files); }
+}));
+// Vista del mes para todas las empresas (base del reporte mensual)
+async function monthOverview(c, period, clientId) {
+  const year = period.slice(0, 4);
+  const formats = (await c.query('SELECT * FROM tax_formats WHERE active ORDER BY position, code')).rows;
+  const clients = (await c.query(`SELECT id, name, id_number, kind FROM clients ${clientId ? 'WHERE id = $1' : ''} ORDER BY name`, clientId ? [clientId] : [])).rows;
+  const rows = [];
+  for (const cl of clients) {
+    const enabled = await clientFormats(c, cl.id);
+    const fs2 = formats.filter(f => enabled.includes(f.code));
+    if (!fs2.length) continue;
+    const filings = Object.fromEntries((await c.query('SELECT f.*, cs.code AS case_code FROM tax_filings f LEFT JOIN cases cs ON cs.id = f.case_id WHERE f.client_id = $1 AND (f.period = $2 OR f.period = $3)', [cl.id, period, String(Number(year) - 1)])).rows
+      .map(f => [`${f.format_code}|${f.period}`, f]));
+    const items = [];
+    for (const f of fs2) {
+      // anuales: se muestran en el mes de su vencimiento (año fiscal anterior)
+      const p = f.frequency === 'anual' ? String(Number(year) - 1) : period;
+      if (f.frequency === 'anual' && dueDate(f, p).slice(0, 7) !== period) continue;
+      const filing = filings[`${f.code}|${p}`] || null;
+      const files = filing ? (await c.query('SELECT count(*)::int n FROM documents WHERE filing_id = $1', [filing.id])).rows[0].n : 0;
+      items.push({ code: f.code, name: f.name, period: p, period_label: periodLabel(p), filing, files, state: filingState(f, p, filing) });
+    }
+    if (items.length) rows.push({ client: cl, items });
+  }
+  const all = rows.flatMap(r => r.items);
+  const count = k => all.filter(i => i.state.code === k).length;
+  return { period, label: periodLabel(period), rows, totals: { total: all.length, enviado: count('enviado'), sin_movimiento: count('sin_movimiento'), no_aplica: count('no_aplica'), pendiente: count('pendiente'), vencido: count('vencido'), amount: S.round2(all.reduce((s2, i) => s2 + Number(i.filing?.amount || 0), 0)) } };
+}
+app.get('/api/tax/overview', auth(...STAFF), wrap(async (req, res) => {
+  const period = /^\d{4}-\d{2}$/.test(req.query.period || '') ? req.query.period : S.todayISO().slice(0, 7);
+  res.json(await db(req, c => monthOverview(c, period, int(req.query.client_id))));
+}));
+// Reporte mensual de lo declarado: PDF o Excel
+app.get('/api/tax/report', auth(...STAFF), wrap(async (req, res) => {
+  const period = /^\d{4}-\d{2}$/.test(req.query.period || '') ? req.query.period : S.todayISO().slice(0, 7);
+  const ov = await db(req, async c => { const o = await monthOverview(c, period, int(req.query.client_id)); await A(c, req, 'reporte_contable', 'contabilidad', period, int(req.query.client_id), { formato: req.query.format || 'pdf' }); return o; });
+  const flat = ov.rows.flatMap(r => r.items.map(i => ({ client: r.client.name, rnc: r.client.id_number, ...i })));
+  const fname = `Reporte contable ${ov.label}${req.query.client_id && ov.rows[0] ? ' - ' + ov.rows[0].client.name : ''}`;
+  if (req.query.format === 'xlsx') {
+    const wb = new ExcelJS.Workbook(); wb.creator = 'LegalTax Consultores SRL'; const ws = wb.addWorksheet(ov.label.slice(0, 31));
+    ws.columns = [['client', 'Empresa', 34], ['rnc', 'RNC / Cédula', 15], ['code', 'Formato', 10], ['name', 'Descripción', 40], ['period_label', 'Período', 16], ['due', 'Vence', 12],
+      ['estado', 'Estado', 22], ['sent_on', 'Fecha de envío', 14], ['ack', 'No. de acuse', 20], ['amount', 'Monto (RD$)', 16], ['files', 'Archivos', 9], ['notes', 'Notas', 34]].map(([key, header, width]) => ({ key, header, width }));
+    flat.forEach(i => ws.addRow({ client: i.client, rnc: i.rnc, code: i.code, name: i.name, period_label: i.period_label, due: dateStr(i.state.due), estado: i.state.label,
+      sent_on: dateStr(i.filing?.sent_on), ack: i.filing?.ack_number || '', amount: i.filing?.amount ?? null, files: i.files, notes: i.filing?.notes || '' }));
+    ws.getColumn('amount').numFmt = '"RD$" #,##0.00';
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }; ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF876440' } };
+    ws.views = [{ state: 'frozen', ySplit: 1 }]; ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 12 } };
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    return res.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Content-Disposition': `attachment; filename="reporte-contable-${period}.xlsx"; filename*=UTF-8''${encodeURIComponent(fname)}.xlsx` }).send(buf);
+  }
+  const settings = await db(req, c => S.getSettings(c));
+  const pdf = await require('./pdf').render('reporte_contable', { number: `RC-${period}`, date: S.todayISO(), issued_by: req.user.name, issued_at: new Date().toISOString(), period_label: ov.label, totals: ov.totals,
+    rows: ov.rows.map(r => ({ client: r.client, items: r.items.map(i => ({ code: i.code, name: i.name, period_label: i.period_label, due: i.state.due, state: i.state.label, state_code: i.state.code, sent_on: i.filing?.sent_on, ack: i.filing?.ack_number, amount: i.filing?.amount, files: i.files })) })) }, settings, null);
+  res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `${req.query.inline ? 'inline' : 'attachment'}; filename="reporte-contable-${period}.pdf"; filename*=UTF-8''${encodeURIComponent(fname)}.pdf`, 'Cache-Control': 'private, no-store' }).send(pdf);
+}));
+// Accesos (Oficina Virtual DGII, TSS, bancos…): la clave se guarda cifrada y solo se muestra a pedido, quedando registrado
+app.post('/api/clients/:id/credentials', auth(...STAFF), wrap(async (req, res) => {
+  const b = req.body; need(str(b.platform), 'Indique la plataforma (ej.: Oficina Virtual DGII)');
+  res.json(await db(req, async c => {
+    const r = (await c.query('INSERT INTO client_credentials (client_id, platform, url, username, secret_enc, notes, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+      [int(req.params.id), b.platform.trim(), str(b.url), str(b.username), str(b.secret) ? M.encrypt(String(b.secret)) : null, str(b.notes), req.user.id])).rows[0];
+    await A(c, req, 'crear_acceso', 'acceso', r.id, int(req.params.id), { platform: b.platform });
+    return r;
+  }));
+}));
+app.patch('/api/clients/:id/credentials/:cid', auth(...STAFF), wrap(async (req, res) => {
+  const b = req.body; const f = pick(b, ['platform', 'url', 'username', 'notes']);
+  if (str(b.secret)) f.secret_enc = M.encrypt(String(b.secret));
+  res.json(await db(req, async c => {
+    const keys = Object.keys(f); need(keys.length, 'Sin cambios');
+    const r = await c.query(`UPDATE client_credentials SET ${keys.map((k, i) => `${k} = $${i + 3}`).join(', ')}, updated_by = $${keys.length + 3}, updated_at = now() WHERE id = $1 AND client_id = $2`,
+      [int(req.params.cid), int(req.params.id), ...keys.map(k => f[k]), req.user.id]);
+    need(r.rowCount, 'Acceso no encontrado', 404);
+    await A(c, req, 'editar_acceso', 'acceso', req.params.cid, int(req.params.id), { campos: keys.map(k => (k === 'secret_enc' ? 'clave' : k)) });
+    return { ok: true };
+  }));
+}));
+app.delete('/api/clients/:id/credentials/:cid', auth('admin'), wrap(async (req, res) => {
+  await db(req, async c => { await c.query('DELETE FROM client_credentials WHERE id = $1 AND client_id = $2', [int(req.params.cid), int(req.params.id)]); await A(c, req, 'eliminar_acceso', 'acceso', req.params.cid, int(req.params.id), null); });
+  res.json({ ok: true });
+}));
+app.post('/api/clients/:id/credentials/:cid/reveal', auth(...STAFF), wrap(async (req, res) => {
+  res.json(await db(req, async c => {
+    const r = (await c.query('SELECT platform, secret_enc FROM client_credentials WHERE id = $1 AND client_id = $2', [int(req.params.cid), int(req.params.id)])).rows[0];
+    need(r, 'Acceso no encontrado', 404); need(r.secret_enc, 'Este acceso no tiene clave guardada');
+    const secret = M.decrypt(r.secret_enc); need(secret != null, 'No se pudo descifrar la clave (¿cambió SESSION_SECRET?). Vuelva a guardarla.');
+    await A(c, req, 'ver_clave', 'acceso', req.params.cid, int(req.params.id), { platform: r.platform });
+    return { secret };
+  }));
 }));
 
 // ───────── facturas
