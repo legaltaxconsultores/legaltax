@@ -1,0 +1,33 @@
+# Publicación en Render (https://render.com) — "New > Blueprint" y seleccione este repositorio.
+services:
+  - type: web
+    name: legaltax
+    runtime: node
+    plan: starter            # necesario para el disco persistente de archivos
+    region: virginia
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/seed.js && node src/server.js
+    healthCheckPath: /api/me
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: legaltax-db, property: connectionString }
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: STORAGE_DIR
+        value: /var/data/storage
+      - key: DEMO_PASSWORD   # contraseña inicial de los usuarios; cámbiela después de entrar
+        sync: false
+      - key: PUBLIC_URL      # p. ej. https://legaltax.onrender.com/ o su dominio
+        sync: false
+    disk:
+      name: archivos
+      mountPath: /var/data
+      sizeGB: 5
+
+databases:
+  - name: legaltax-db
+    plan: basic-256mb
+    databaseName: legaltax
+    user: legaltax
