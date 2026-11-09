@@ -272,13 +272,14 @@ function viewLogin() {
       <label class="f">Correo electrónico<input name="email" type="email" required autocomplete="username"></label>
       <label class="f">Contraseña<input name="password" type="password" required autocomplete="current-password"></label>
       <button class="btn primary" style="width:100%;padding:11px">Entrar</button>
-      ${state.demo ? html`<div class="demo-users"><b>Versión de prueba</b> — contraseña de todos: <code>LegalTax2026!</code><br>
-        ${[['admin@legaltax.do', 'Administración'], ['expedientes@legaltax.do', 'Expedientes'], ['cobros@legaltax.do', 'Cobros'], ['maria.pena@example.com', 'Cliente: María Peña'], ['finanzas@caribeazul.do', 'Cliente: Caribe Azul (tras el recorrido)']]
+      ${state.demo ? html`<div class="demo-users"><b>Versión de prueba</b> — haga clic en un usuario para entrar (contraseña de todos: <code>LegalTax2026!</code>)<br>
+        ${[['admin@legaltax.do', 'Administración'], ['expedientes@legaltax.do', 'Expedientes'], ['cobros@legaltax.do', 'Cobros'], ['maria.pena@example.com', 'Cliente: María Peña'], ['finanzas@caribeazul.do', 'Cliente: Constructora Caribe Azul']]
           .map(([e, l]) => html`<button type="button" class="btn link" data-email="${e}">${l}</button><br>`)}
       </div>` : html`<p class="small muted" style="margin-top:14px">¿Olvidó su contraseña? Pida a Administración un nuevo enlace de acceso.</p>`}
     </form></section></div>`);
   const f = $('#lf');
-  on(f, '[data-email]', 'click', (e, b) => { f.email.value = b.dataset.email; f.password.focus(); });
+  // versión de prueba: un clic en el usuario completa correo y contraseña y entra
+  on(f, '[data-email]', 'click', (e, b) => { f.email.value = b.dataset.email; f.password.value = 'LegalTax2026!'; f.requestSubmit ? f.requestSubmit() : f.onsubmit(new Event('submit')); });
   f.onsubmit = async e => {
     e.preventDefault();
     try { const r = await POST('/api/login', { email: f.email.value, password: f.password.value }); state.me = r.user; await boot(); go('#/'); }
