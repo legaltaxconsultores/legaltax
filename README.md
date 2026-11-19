@@ -1,6 +1,6 @@
 # LegalTax Consultores SRL: plataforma interna y portal de clientes
 
-> 📍 **Punto de corte v1.0 (19/11/2026).** Ver [MAPA.md](MAPA.md): estructura de archivos, módulos, base de datos, rutas e instalación en un servidor propio.
+> 📍 **Punto de corte v1.0 (19/11/2026)**, rama `punto-de-corte-v1.0`. Ver [MAPA.md](MAPA.md): estructura de archivos, módulos, base de datos, rutas e instalación en un servidor propio.
 
 **LegalTax Consultores SRL** · RNC 1-33-19505-4 · Av. Rómulo Betancourt No. 517, Santo Domingo · (809) 363-9979 · legaltax.consultores@gmail.com
 

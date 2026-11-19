@@ -4,7 +4,9 @@
 
 Este documento describe el sistema tal como quedó en este punto de corte: qué contiene cada carpeta y archivo, cómo se organiza la información, qué rutas expone el servidor y cómo instalarlo en un servidor propio.
 
-En GitHub, este punto de corte es la etiqueta **`v1.0`**. Para volver a esta versión exacta en cualquier momento: `git checkout v1.0`.
+En GitHub, este punto de corte es la rama **`punto-de-corte-v1.0`**. No se modifica: los cambios nuevos van a `main`. Para volver a esta versión exacta en cualquier momento: `git checkout punto-de-corte-v1.0`.
+
+Si además quiere una etiqueta o "Release" en GitHub: entre a *Releases → Draft a new release*, escriba `v1.0` como etiqueta y elija la rama `punto-de-corte-v1.0` como destino.
 
 ---
 
@@ -161,11 +163,11 @@ El instalador pide el **dominio** (Enter = uno gratuito `IP.sslip.io`) y la **co
 - activa el firewall (puertos 22, 80 y 443);
 - programa la copia de seguridad diaria (2:40 a. m.) y el padrón DGII semanal.
 
-Hoy `main` y `v1.0` son la misma versión. Si más adelante quiere fijar el servidor en este punto de corte:
+Hoy `main` y `punto-de-corte-v1.0` son la misma versión. Si más adelante quiere fijar el servidor en este punto de corte:
 
 ```bash
-git -C /opt/legaltax fetch --depth 1 origin tag v1.0
-git -C /opt/legaltax checkout v1.0
+git -C /opt/legaltax fetch --depth 1 origin punto-de-corte-v1.0
+git -C /opt/legaltax checkout -B punto-de-corte-v1.0 FETCH_HEAD
 systemctl restart legaltax
 ```
 
