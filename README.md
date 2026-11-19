@@ -1,5 +1,7 @@
 # LegalTax Consultores SRL: plataforma interna y portal de clientes
 
+> 📍 **Punto de corte v1.0 (19/11/2026).** Ver [MAPA.md](MAPA.md): estructura de archivos, módulos, base de datos, rutas e instalación en un servidor propio.
+
 **LegalTax Consultores SRL** · RNC 1-33-19505-4 · Av. Rómulo Betancourt No. 517, Santo Domingo · (809) 363-9979 · legaltax.consultores@gmail.com
 
 Identidad visual: marrón `#876440`, gris `#D9D9D9` y blanco. El logo está en `public/brand/logo.png` y el monograma en `public/brand/mark.png`.
