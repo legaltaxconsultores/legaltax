@@ -121,7 +121,7 @@ legaltax/
 | Personas y acceso | `users`, `clients`, `api_tokens` |
 | Expedientes | `cases`, `case_events`, `deadlines`, `doc_requests` |
 | Documentos | `documents`, `doc_types`, `generated_docs` (PDF emitidos, inmutables y con versiones) |
-| Cobros | `quotes`, `quote_items`, `installments`, `payments`, `invoices` |
+| Cobros | `quotes`, `quote_items`, `installments`, `payments`, `invoices` (papelera: columnas `deleted_at`, `deleted_by`, `delete_reason`; sus PDF se marcan con `generated_docs.deleted`) |
 | Contabilidad | `tax_formats`, `client_tax_formats`, `tax_filings`, `client_credentials` (claves cifradas) |
 | DGII | `dgii_cache` (consultas de 30 días), `dgii_padron` (padrón oficial) |
 | Comunicación | `notices` (avisos), `email_log` |
