@@ -3,8 +3,10 @@
 #  LegalTax Consultores — instalador para un servidor Ubuntu 22.04 / 24.04
 #  (DigitalOcean, Akamai/Linode, Hostinger VPS, Vultr o una PC de la oficina)
 #
-#  Uso, conectado al servidor como root:
-#    curl -fsSL https://raw.githubusercontent.com/legaltaxconsultores/legaltax/main/scripts/instalar-servidor.sh | bash
+#  Uso, conectado al servidor como root — cualquiera de las dos formas:
+#    a) Con el paquete subido al servidor (ZIP descomprimido):   bash instalar.sh
+#    b) Descargando desde GitHub:
+#       curl -fsSL https://raw.githubusercontent.com/legaltaxconsultores/legaltax/main/scripts/instalar-servidor.sh | bash
 #
 #  Qué hace: instala PostgreSQL, Node.js 20 y Caddy (HTTPS automático), descarga
 #  LegalTax, crea la base de datos y la cuenta de Administración, deja el sistema
@@ -18,6 +20,12 @@ APP_DIR=/opt/legaltax
 DATA_DIR=/var/lib/legaltax
 ENV_FILE=/etc/legaltax.env
 TEST_MODE="${LEGALTAX_TEST:-0}"   # 1 = prueba sin systemd/firewall/Caddy (uso interno)
+# ¿se ejecuta desde un paquete subido (carpeta con package.json y src/)? Entonces se instala desde esos archivos, sin GitHub.
+SRC_DIR=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  cand="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [ -f "$cand/package.json" ] && [ -f "$cand/src/server.js" ] && [ "$cand" != "$APP_DIR" ]; then SRC_DIR="$cand"; fi
+fi
 DB_NAME="${LEGALTAX_DB:-legaltax}"; DB_USER="${LEGALTAX_DB_USER:-legaltax}"; BK_USER="${DB_USER}_backup"
 
 c_ok()   { printf '\033[1;32m✔ %s\033[0m\n' "$*"; }
@@ -61,7 +69,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 c_step "Instalando programas del sistema (PostgreSQL, Git, firewall)…"
 apt-get update -qq
-apt-get install -y -qq curl git ca-certificates gnupg postgresql postgresql-contrib ufw cron > /dev/null
+apt-get install -y -qq curl git rsync unzip ca-certificates gnupg postgresql postgresql-contrib ufw cron > /dev/null
 c_ok "Programas del sistema instalados"
 
 if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
@@ -90,7 +98,12 @@ c_step "Preparando usuario y carpetas…"
 id legaltax >/dev/null 2>&1 || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin legaltax
 mkdir -p "$DATA_DIR/storage" "$DATA_DIR/backups"
 git config --global --get-all safe.directory 2>/dev/null | grep -qx "$APP_DIR" || git config --global --add safe.directory "$APP_DIR"
-if [ -d "$APP_DIR/.git" ]; then
+if [ -n "$SRC_DIR" ]; then
+  mkdir -p "$APP_DIR"
+  rsync -a --delete --exclude .git --exclude node_modules --exclude storage --exclude backups --exclude entrega --exclude 'test/output' --exclude .env "$SRC_DIR/" "$APP_DIR/"
+  VER="$(node -p "require('$APP_DIR/package.json').version" 2>/dev/null || echo '?')"
+  c_ok "Sistema copiado desde el paquete subido ($SRC_DIR → $APP_DIR, versión $VER)"
+elif [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" fetch -q origin main
   git -C "$APP_DIR" reset -q --hard origin/main
   c_ok "Sistema actualizado a la última versión ($(git -C "$APP_DIR" log -1 --format=%h))"
@@ -149,8 +162,15 @@ sed -i 's/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=/' "$ENV_FILE"
 # comando de actualización
 cat > /usr/local/bin/legaltax-actualizar <<'UPD'
 #!/usr/bin/env bash
+# Uso:  legaltax-actualizar                      → descarga la última versión de GitHub
+#       legaltax-actualizar /root/LegalTax-v1.2  → instala una versión nueva subida en esa carpeta
 set -e
-curl -fsSL https://raw.githubusercontent.com/legaltaxconsultores/legaltax/main/scripts/instalar-servidor.sh | bash
+if [ -n "${1:-}" ]; then
+  [ -f "$1/scripts/instalar-servidor.sh" ] || { echo "No encuentro $1/scripts/instalar-servidor.sh (¿descomprimió el ZIP ahí?)"; exit 1; }
+  bash "$1/scripts/instalar-servidor.sh"
+else
+  curl -fsSL https://raw.githubusercontent.com/legaltaxconsultores/legaltax/main/scripts/instalar-servidor.sh | bash
+fi
 UPD
 chmod +x /usr/local/bin/legaltax-actualizar
 
@@ -221,7 +241,8 @@ echo "   Usuario:     admin   (o $ADMIN_EMAIL)"
 echo "   Contraseña:  la que escribió durante la instalación"
 echo
 echo "   El certificado HTTPS puede tardar 1–2 minutos la primera vez."
-echo "   Actualizar el sistema más adelante:   legaltax-actualizar"
+echo "   Actualizar con un ZIP nuevo subido:   legaltax-actualizar /root/<carpeta del ZIP>"
+echo "   Actualizar desde GitHub:              legaltax-actualizar"
 echo "   Ver registros si algo falla:          journalctl -u legaltax -n 50"
 echo "   Copias de seguridad:                  $DATA_DIR/backups"
 echo "  ════════════════════════════════════════════════════════════"

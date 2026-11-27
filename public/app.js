@@ -63,7 +63,7 @@ async function api(method, url, body) {
   if (ct.includes('application/pdf')) return r.blob();
   return ct.includes('json') ? r.json() : r.text();
 }
-const GET = u => api('GET', u), POST = (u, b) => api('POST', u, b ?? {}), PATCH = (u, b) => api('PATCH', u, b), PUT = (u, b) => api('PUT', u, b);
+const GET = u => api('GET', u), POST = (u, b) => api('POST', u, b ?? {}), PATCH = (u, b) => api('PATCH', u, b), PUT = (u, b) => api('PUT', u, b), DEL = (u, b) => api('DELETE', u, b ?? {});
 const qs = o => Object.entries(o).filter(([, v]) => v !== '' && v != null).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
 const formData = f => { const o = {}; new FormData(f).forEach((v, k) => { if (!(v instanceof File)) o[k] = v; }); $$('input[type=checkbox]', f).forEach(c => { if (c.name) o[c.name] = c.checked; }); return o; };
 
@@ -1315,7 +1315,7 @@ route(/^\/documentos\/(\d+)$/, async (el, [id]) => {
 });
 
 // ───── facturas
-const INV_FILTERS = [['', 'Todas'], ['pendientes', 'Pendientes'], ['vencidas', 'Vencidas'], ['pagada', 'Pagadas'], ['anulada', 'Anuladas']];
+const INV_FILTERS = [['', 'Todas'], ['pendientes', 'Pendientes'], ['vencidas', 'Vencidas'], ['pagada', 'Pagadas'], ['anulada', 'Anuladas'], ['papelera', '🗑 Papelera']];
 function invoicesTable(rows, showClient = true) {
   return table([{ h: 'Número', v: r => html`<b>${r.number}</b>` }, ...(showClient ? [{ h: 'Cliente', v: r => r.client_name }] : []),
     { h: 'Concepto', v: r => html`${r.description}<div class="small muted">${r.quote_number}${r.inst_seq ? ' · cuota #' + r.inst_seq : ''}</div>` },
@@ -1324,11 +1324,30 @@ function invoicesTable(rows, showClient = true) {
     { h: 'Estado', v: r => html`<span class="b ${r.state.tone}">${r.state.label}</span>${r.void_reason ? html`<div class="small" style="color:var(--bad)">${r.void_reason}</div>` : ''}` },
     { h: '', v: r => html`<span class="actions">${r.gendoc_id ? html`<button class="btn sm primary" data-act="viewgd" data-id="${r.gendoc_id}">PDF</button>` : ''}
       ${r.status === 'emitida' ? html`<button class="btn sm" data-act="invnotice" data-id="${r.id}" data-client="${r.client_id}">📣 Aviso</button><button class="btn sm" data-act="invstate" data-id="${r.id}" data-client="${r.client_id}">Estado</button>
-      ${can('admin', 'cobros') ? html`<button class="btn sm danger" data-act="invvoid" data-id="${r.id}">Anular</button>` : ''}` : ''}</span>` }],
+      ${can('admin', 'cobros') ? html`<button class="btn sm danger" data-act="invvoid" data-id="${r.id}">Anular</button>` : ''}` : ''}
+      ${can('admin', 'cobros') ? html`<button class="btn sm danger" data-act="invdel" data-id="${r.id}" data-number="${r.number}" data-status="${r.status}" title="Mover a la papelera">🗑 Eliminar</button>` : ''}</span>` }],
   rows, { empty: 'No hay facturas.' });
+}
+function trashTable(rows) {
+  return table([{ h: 'Número', v: r => html`<b>${r.number}</b><div class="small muted">${r.status === 'anulada' ? 'Estaba anulada' : 'Estaba emitida'}</div>` }, { h: 'Cliente', v: r => r.client_name },
+    { h: 'Concepto', v: r => html`${r.description}<div class="small muted">${r.quote_number}${r.inst_seq ? ' · cuota #' + r.inst_seq : ''}</div>` },
+    { h: 'Total', num: true, v: r => money(r.total) },
+    { h: 'Eliminada', v: r => html`${fdt(r.deleted_at)}<div class="small muted">por ${r.deleted_by_name || '—'}</div><div class="small" style="color:var(--bad)">${r.delete_reason || ''}</div>` },
+    { h: '', v: r => html`<span class="actions">${r.gendoc_id ? html`<button class="btn sm" data-act="viewgd" data-id="${r.gendoc_id}">PDF</button>` : ''}
+      <button class="btn sm primary" data-act="invrestore" data-id="${r.id}">↩ Restaurar</button>
+      ${can('admin') ? html`<button class="btn sm danger" data-act="invpurge" data-id="${r.id}" data-number="${r.number}">Borrar definitivamente</button>` : ''}</span>` }],
+  rows, { empty: 'La papelera está vacía.' });
 }
 function invActs() {
   return {
+    invdel: d => modal('Eliminar factura ' + d.number, html`<div class="alert warn">La factura <b>${d.number}</b> y su PDF se moverán a la <b>papelera</b>: dejarán de aparecer en listas, estados de cuenta, avisos y en el portal del cliente. Podrá restaurarla desde Facturas → 🗑 Papelera.</div>
+      <p class="small muted">El número (NCF / e-CF) no se vuelve a usar. ${d.status === 'emitida' ? html`Si la factura ya fue entregada al cliente o reportada a la DGII, lo correcto es <b>anularla</b> (con nota de crédito) en lugar de eliminarla.` : ''}</p>
+      <label class="f">Motivo (obligatorio)<textarea name="reason" required placeholder="Ej.: generada por error, duplicada…"></textarea></label>`,
+      { submitLabel: 'Mover a la papelera', submit: async x => { await POST(`/api/invoices/${d.id}/delete`, x); toast('Factura movida a la papelera'); render(); } }),
+    invrestore: async d => { await POST(`/api/invoices/${d.id}/restore`); toast('Factura restaurada'); render(); },
+    invpurge: d => modal('Borrar definitivamente ' + d.number, html`<div class="alert bad">Esta acción <b>no se puede deshacer</b>: se borran la factura y sus PDF del sistema y de la carpeta del cliente. En la auditoría queda constancia con los datos de la factura.</div>
+      <label class="f">Para confirmar, escriba el número <b>${d.number}</b><input name="confirm" required autocomplete="off"></label>`,
+      { submitLabel: 'Borrar definitivamente', submit: async x => { await DEL(`/api/invoices/${d.id}`, x); toast('Factura borrada definitivamente'); render(); } }),
     viewgd: d => viewPdf(gdUrl(d.id)),
     invnotice: d => notice('factura', d.client, d.id), invstate: d => notice('estado_factura', d.client, d.id),
     invvoid: d => modal('Anular factura', html`<div class="alert warn">La factura y su PDF quedarán anulados. Si corresponde, registre la nota de crédito en el sistema de la DGII.</div><label class="f">Motivo (obligatorio)<textarea name="reason" required></textarea></label>`,
@@ -1379,13 +1398,14 @@ function noticesTable(rows) {
   rows, { empty: 'No se han enviado avisos.' });
 }
 route(/^\/facturas$/, async (el, _, q) => {
-  const st = q.state || ''; const rows = await GET('/api/invoices?' + qs({ state: st }));
+  const st = q.state || ''; const rows = await GET('/api/invoices?' + qs({ state: st })); const trash = st === 'papelera';
   const tot = rows.filter(r => r.status === 'emitida').reduce((a, r) => ({ total: a.total + r.total, pend: a.pend + r.state.balance }), { total: 0, pend: 0 });
   el.innerHTML = String(html`${head('Facturas', 'Generación de facturas, estado de pago y avisos al cliente.', can('admin', 'cobros') ? html`<button class="btn primary" data-act="new">🧾 Generar factura</button>` : '')}
     <div class="tabs">${INV_FILTERS.map(([k, l]) => html`<a href="#/facturas${k ? '?state=' + k : ''}" class="${st === k ? 'active' : ''}">${l}</a>`)}</div>
-    <div class="kpis"><div class="kpi"><div class="v">${rows.length}</div><div class="l">Facturas en la vista</div></div><div class="kpi"><div class="v" style="font-size:1.2rem">${money(tot.total)}</div><div class="l">Total facturado</div></div>
+    ${trash ? html`<div class="alert">Facturas eliminadas. No cuentan en saldos, estados de cuenta ni en el portal del cliente. Puede restaurarlas${can('admin') ? ' o borrarlas definitivamente' : ''}; Cobros puede restaurar, solo Administración borra definitivamente.</div>
+    <div class="card flush">${trashTable(rows)}</div>` : html`<div class="kpis"><div class="kpi"><div class="v">${rows.length}</div><div class="l">Facturas en la vista</div></div><div class="kpi"><div class="v" style="font-size:1.2rem">${money(tot.total)}</div><div class="l">Total facturado</div></div>
       <div class="kpi gold"><div class="v" style="font-size:1.2rem">${money(tot.pend)}</div><div class="l">Pendiente de cobro</div></div></div>
-    <div class="card flush">${invoicesTable(rows)}</div>
+    <div class="card flush">${invoicesTable(rows)}</div>`}
     <p class="small muted">La factura PDF es válida para fines fiscales solo si su número (NCF o e-CF) fue autorizado por la DGII. Desde 2026 la facturación electrónica (e-CF) es obligatoria: registre aquí el rango e-CF asignado o emita el e-CF oficial en su sistema autorizado y use esta factura como soporte de cobro.</p>`);
   act(el, { new: () => invoiceModal(), ...invActs() });
 }, ['admin', 'cobros', 'expedientes']);

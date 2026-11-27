@@ -1,6 +1,6 @@
 # LegalTax Consultores SRL: plataforma interna y portal de clientes
 
-> 📍 **Punto de corte v1.0 (19/11/2026)**, rama `punto-de-corte-v1.0`. Ver [MAPA.md](MAPA.md): estructura de archivos, módulos, base de datos, rutas e instalación en un servidor propio.
+> 📍 **Versión 1.1 (27/11/2026)**, rama `punto-de-corte-v1.1`. Instalación en la nube subiendo el ZIP: [INSTALAR.txt](INSTALAR.txt). Ver [MAPA.md](MAPA.md): estructura de archivos, módulos, base de datos, rutas e instalación en un servidor propio.
 
 **LegalTax Consultores SRL** · RNC 1-33-19505-4 · Av. Rómulo Betancourt No. 517, Santo Domingo · (809) 363-9979 · legaltax.consultores@gmail.com
 
@@ -93,6 +93,8 @@ En *Facturas* (y desde la cotización o la ficha del cliente → *Generar factur
 
 El **estado** de cada factura se calcula con los pagos validados: Pendiente de pago, Pago parcial, Vencida o Pagada (o Anulada). El cliente lo ve en su portal (*Facturas*).
 
+**Papelera de facturas.** El botón *🗑 Eliminar* (Administración y Cobros) mueve la factura y su PDF a *Facturas → 🗑 Papelera*, con motivo obligatorio. Desde ese momento no aparece en listas, saldos, avisos, carpetas ni en el portal del cliente, y la cuota se puede volver a facturar (con un número nuevo: el NCF nunca se reutiliza). En la papelera se puede *Restaurar* o, solo Administración, *Borrar definitivamente* escribiendo el número de la factura para confirmar. Si la factura ya se entregó al cliente o se reportó a la DGII, lo correcto es *Anular* (con nota de crédito), no eliminar.
+
 > Importante: desde 2026 la facturación electrónica (e-CF, Ley 32-23) es obligatoria. La factura PDF de LegalTax solo es válida para fines fiscales si el número fue autorizado por la DGII. Registre en la secuencia el rango e-CF asignado, o emita el e-CF oficial en su sistema autorizado (Facturador Gratuito de la DGII o un proveedor certificado) y use esta factura como soporte de cobro. La firma digital y el envío del e-CF a la DGII no están incluidos.
 
 ## Documentos escaneados por expediente
@@ -158,7 +160,7 @@ El sistema se instala en un servidor **Ubuntu 22.04 o 24.04** con **un solo coma
 | Hostinger | VPS KVM 1 | ~US$ 6–7/mes |
 | Vultr | Cloud Compute 1 GB | ~US$ 6/mes |
 
-Con el servidor creado, conéctese como `root` (desde la consola web del proveedor o por SSH) y ejecute:
+Con el servidor creado, suba el paquete `LegalTax-v1.1-servidor.zip` y ejecute `bash instalar.sh` (paso a paso en [INSTALAR.txt](INSTALAR.txt)). O bien, conéctese como `root` (desde la consola web del proveedor o por SSH) y descárguelo de GitHub:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/legaltaxconsultores/legaltax/main/scripts/instalar-servidor.sh | bash

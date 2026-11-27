@@ -1,0 +1,99 @@
+════════════════════════════════════════════════════════════════════
+  LegalTax Consultores SRL — Instalación en un servidor en la nube
+  Versión 1.1
+════════════════════════════════════════════════════════════════════
+
+Lo que necesita:
+  • Un servidor (VPS) con Ubuntu 24.04 o 22.04, mínimo 1 GB de RAM.
+    Ejemplos: DigitalOcean (Droplet de US$ 6, acepta PayPal),
+    Vultr, Hostinger VPS o Akamai/Linode.
+  • La dirección IP del servidor y la contraseña de "root" que le da
+    el proveedor al crearlo.
+  • Este archivo ZIP: LegalTax-v1.1-servidor.zip
+
+No hace falta GitHub ni instalar nada antes: el instalador pone
+PostgreSQL, Node.js, el certificado HTTPS, el firewall y las copias
+de seguridad.
+
+
+──────────────────────────────────────────────────────────────────
+ PASO 1. Subir el ZIP al servidor
+──────────────────────────────────────────────────────────────────
+Opción fácil (Windows): programa WinSCP (gratis, winscp.net)
+  - Protocolo: SFTP · Servidor: la IP · Usuario: root · su contraseña
+  - Arrastre LegalTax-v1.1-servidor.zip a la carpeta /root
+
+Opción con comando (Windows PowerShell, Mac o Linux), desde la
+carpeta donde está el ZIP:
+
+  scp LegalTax-v1.1-servidor.zip root@IP_DEL_SERVIDOR:/root/
+
+
+──────────────────────────────────────────────────────────────────
+ PASO 2. Conectarse al servidor
+──────────────────────────────────────────────────────────────────
+Use la "consola" web del proveedor, o en PowerShell:
+
+  ssh root@IP_DEL_SERVIDOR
+
+
+──────────────────────────────────────────────────────────────────
+ PASO 3. Descomprimir e instalar (copie y pegue, una línea a la vez)
+──────────────────────────────────────────────────────────────────
+  apt-get update && apt-get install -y unzip
+  unzip -o /root/LegalTax-v1.1-servidor.zip -d /root
+  bash /root/LegalTax-v1.1/instalar.sh
+
+El instalador le pregunta dos cosas:
+  1) El dominio. Pulse Enter para usar uno gratuito del tipo
+     159-89-10-20.sslip.io, o escriba el suyo (ej.: sistema.legaltax.do)
+     si ya lo apuntó a la IP del servidor (registro DNS tipo A).
+  2) La contraseña de Administración (8+ caracteres, letras y números).
+
+Tarda de 3 a 6 minutos. Al final muestra la dirección, por ejemplo:
+
+  https://159-89-10-20.sslip.io
+  Usuario: admin  ·  Contraseña: la que escribió
+
+(El candado HTTPS puede tardar 1–2 minutos la primera vez.)
+
+
+──────────────────────────────────────────────────────────────────
+ PASO 4. Primeros ajustes dentro del sistema
+──────────────────────────────────────────────────────────────────
+  1. Configuración → Consulta DGII → "Probar consulta".
+  2. Configuración → Correo: contraseña de aplicación de Gmail
+     de legaltax.consultores@gmail.com.
+  3. Configuración → Numeración: rango NCF / e-CF autorizado.
+  4. Configuración → Usuarios: crear al equipo (Administración,
+     Expedientes, Cobros). Cada uno recibe contraseña temporal y la
+     cambia al entrar.
+
+
+──────────────────────────────────────────────────────────────────
+ Actualizar a una versión nueva (sin perder datos)
+──────────────────────────────────────────────────────────────────
+Suba el ZIP nuevo a /root (Paso 1) y ejecute, por ejemplo:
+
+  unzip -o /root/LegalTax-v1.2-servidor.zip -d /root
+  legaltax-actualizar /root/LegalTax-v1.2
+
+Los documentos, la base de datos, los usuarios y la configuración se
+conservan. Antes de actualizar puede sacar una copia con:
+  su -s /bin/bash legaltax -c 'set -a; . /etc/legaltax.env; set +a; cd /opt/legaltax && bash scripts/backup.sh'
+
+
+──────────────────────────────────────────────────────────────────
+ Dónde queda cada cosa en el servidor
+──────────────────────────────────────────────────────────────────
+  /opt/legaltax                 programa
+  /var/lib/legaltax/storage     documentos (carpeta "Documentos LegalTax")
+  /var/lib/legaltax/backups     copias diarias 2:40 a. m. (se guardan 30)
+  /etc/legaltax.env             configuración y claves internas
+
+  Ver si está funcionando:   systemctl status legaltax
+  Ver errores:               journalctl -u legaltax -n 50
+  Reiniciar:                 systemctl restart legaltax
+
+El mapa completo del sistema (módulos, base de datos, rutas) está en
+MAPA.md dentro de este mismo paquete.

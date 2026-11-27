@@ -1,12 +1,14 @@
 # Mapa del sistema LegalTax Consultores
 
-**Punto de corte v1.0 · 19 de noviembre de 2026**
+**Versión 1.1 · 27 de noviembre de 2026**
 
-Este documento describe el sistema tal como quedó en este punto de corte: qué contiene cada carpeta y archivo, cómo se organiza la información, qué rutas expone el servidor y cómo instalarlo en un servidor propio.
+Este documento describe el sistema tal como está en esta versión: qué contiene cada carpeta y archivo, cómo se organiza la información, qué rutas expone el servidor y cómo instalarlo en un servidor propio.
 
-En GitHub, este punto de corte es la rama **`punto-de-corte-v1.0`**. No se modifica: los cambios nuevos van a `main`. Para volver a esta versión exacta en cualquier momento: `git checkout punto-de-corte-v1.0`.
+**Novedades de la v1.1:** papelera de facturas (eliminar, restaurar y borrar definitivamente) e instalación en la nube subiendo el paquete ZIP, sin depender de GitHub. Las instrucciones paso a paso están en **`INSTALAR.txt`**.
 
-Si además quiere una etiqueta o "Release" en GitHub: entre a *Releases → Draft a new release*, escriba `v1.0` como etiqueta y elija la rama `punto-de-corte-v1.0` como destino.
+En GitHub, cada versión cerrada tiene su rama: **`punto-de-corte-v1.1`** (esta) y `punto-de-corte-v1.0` (la anterior). No se modifican: los cambios nuevos van a `main`. Para volver a una versión exacta: `git checkout punto-de-corte-v1.1`.
+
+Si además quiere una etiqueta o "Release" en GitHub: entre a *Releases → Draft a new release*, escriba `v1.1` como etiqueta y elija la rama `punto-de-corte-v1.1` como destino.
 
 ---
 
@@ -40,6 +42,8 @@ Si además quiere una etiqueta o "Release" en GitHub: entre a *Releases → Draf
 ```
 legaltax/
 ├── MAPA.md                  ← este documento
+├── INSTALAR.txt             ← instalación en un servidor en la nube subiendo el ZIP (paso a paso)
+├── instalar.sh              ← lanza el instalador desde el paquete subido: bash instalar.sh
 ├── README.md                ← manual de uso, instalación y funciones
 ├── package.json             ← dependencias del servidor y comandos npm
 ├── .gitignore
@@ -77,6 +81,7 @@ legaltax/
 │   ├── e2e.js               ← recorrido completo: 61 verificaciones
 │   ├── contabilidad.js      ← módulo Contabilidad: 16 verificaciones
 │   ├── dgii.js              ← consulta de RNC con imitación de la DGII: 11 verificaciones
+│   ├── papelera.js          ← papelera de facturas: 15 verificaciones
 │   └── smtp-capture.js      ← servidor de correo de prueba
 │
 └── desktop/                 ← (opcional) programa de escritorio Windows que abre el sistema en su ventana
@@ -98,7 +103,7 @@ legaltax/
 | **📊 Contabilidad** | Accesos cifrados (Oficina Virtual DGII, TSS…), 606/607/IT-1/IR-2 por mes, reporte mensual | `#/contabilidad…` | `/api/tax/…`, `/api/clients/:id/credentials…` |
 | **Agenda** | Audiencias, plazos y tareas con alertas | `#/agenda` | `/api/deadlines…` |
 | **Cotizaciones** | Honorarios + ITBIS 18 %, plan de cuotas, publicación y aceptación | `#/cotizaciones…` | `/api/quotes…` |
-| **Facturas** | Facturas por cuota o total (NCF/e-CF), estado de pago | `#/facturas` | `/api/invoices…` |
+| **Facturas** | Facturas por cuota o total (NCF/e-CF), estado de pago, anular; **🗑 Papelera**: eliminar con motivo, restaurar y borrar definitivamente | `#/facturas`, `#/facturas?state=papelera` | `/api/invoices…`, `POST /api/invoices/:id/delete`, `POST /api/invoices/:id/restore`, `DELETE /api/invoices/:id` |
 | **Vouchers y pagos** | Validar o rechazar comprobantes; recibo automático | `#/pagos` | `/api/payments…` |
 | **Solicitudes** | Pedir documentos al cliente | `#/solicitudes` | `/api/requests…` |
 | **Documentos PDF** | Archivo de PDF emitidos, versiones, anulación, envío | `#/documentos…` | `/api/gendocs…` |
@@ -149,9 +154,19 @@ Los nombres de archivo son legibles, por ejemplo `2026-11-09 Cédula de identida
 
 ## 6. Instalación en un servidor propio
 
-### Opción A: Ubuntu 22.04 / 24.04 (recomendada, un solo comando)
+### Opción A: Ubuntu 22.04 / 24.04 (recomendada)
 
-Como `root` en el servidor:
+**A1 — Subiendo el paquete ZIP (sin GitHub).** Paso a paso en `INSTALAR.txt`. En resumen, como `root` en el servidor, después de subir el ZIP a `/root`:
+
+```bash
+apt-get update && apt-get install -y unzip
+unzip LegalTax-v1.1-servidor.zip -d /root
+bash /root/LegalTax-v1.1/instalar.sh
+```
+
+El instalador copia los archivos del paquete a `/opt/legaltax`. Para actualizar más adelante, se sube el ZIP nuevo, se descomprime y se ejecuta `legaltax-actualizar /root/<carpeta nueva>`: los documentos, la base de datos y la configuración se conservan.
+
+**A2 — Descargando desde GitHub:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/legaltaxconsultores/legaltax/main/scripts/instalar-servidor.sh | bash
@@ -163,15 +178,15 @@ El instalador pide el **dominio** (Enter = uno gratuito `IP.sslip.io`) y la **co
 - activa el firewall (puertos 22, 80 y 443);
 - programa la copia de seguridad diaria (2:40 a. m.) y el padrón DGII semanal.
 
-Hoy `main` y `punto-de-corte-v1.0` son la misma versión. Si más adelante quiere fijar el servidor en este punto de corte:
+Hoy `main` y `punto-de-corte-v1.1` son la misma versión. Si instaló desde GitHub y quiere fijar el servidor en este punto de corte:
 
 ```bash
-git -C /opt/legaltax fetch --depth 1 origin punto-de-corte-v1.0
-git -C /opt/legaltax checkout -B punto-de-corte-v1.0 FETCH_HEAD
+git -C /opt/legaltax fetch --depth 1 origin punto-de-corte-v1.1
+git -C /opt/legaltax checkout -B punto-de-corte-v1.1 FETCH_HEAD
 systemctl restart legaltax
 ```
 
-Tenga en cuenta que `legaltax-actualizar` vuelve siempre a la última versión de `main`.
+Tenga en cuenta que `legaltax-actualizar` sin carpeta descarga siempre la última versión de `main`.
 
 | Dónde | Qué |
 |---|---|
@@ -180,6 +195,7 @@ Tenga en cuenta que `legaltax-actualizar` vuelve siempre a la última versión d
 | `/var/lib/legaltax/storage` | Documentos |
 | `/var/lib/legaltax/backups` | Copias de seguridad (se conservan 30) |
 | `systemctl status legaltax` / `journalctl -u legaltax -n 50` | Estado y registros |
+| `legaltax-actualizar /root/<carpeta>` | Actualizar con un paquete ZIP nuevo ya descomprimido |
 | `legaltax-actualizar` | Actualizar a la última versión de GitHub |
 
 ### Opción B: cualquier otro servidor (Windows Server, otra distribución Linux, macOS)
@@ -222,7 +238,7 @@ Tenga en cuenta que `legaltax-actualizar` vuelve siempre a la última versión d
 
 ---
 
-## 7. Qué incluye el punto de corte v1.0
+## 7. Qué incluye la versión 1.1
 
 - Inicio de sesión con usuario o correo, bloqueo por intentos, contraseña temporal con cambio obligatorio y Mi cuenta.
 - Roles: Administración, Equipo de expedientes, Cobros y Cliente.
@@ -231,11 +247,12 @@ Tenga en cuenta que `legaltax-actualizar` vuelve siempre a la última versión d
 - **Carpetas** por cliente y expediente en el disco del servidor, con descarga en ZIP.
 - **Contabilidad:** accesos cifrados, declaraciones mensuales y anuales con archivos y acuses, y reporte mensual en PDF y Excel.
 - Cotizaciones con ITBIS y cuotas, aceptación desde el portal, vouchers con validación, recibos y facturas con estado.
+- **Papelera de facturas (nuevo en v1.1):** *Eliminar* (Administración y Cobros, con motivo obligatorio) quita la factura y su PDF de listas, saldos, avisos, carpetas y portal; la cuota se puede volver a facturar con un número nuevo (el NCF no se reutiliza). *Restaurar* la devuelve, salvo que la cuota ya tenga otra factura vigente. *Borrar definitivamente* (solo Administración, escribiendo el número para confirmar) elimina la factura y sus PDF del disco. Todo queda en la auditoría.
 - PDF con membrete: cotización, recibo de dinero, recibo de documentos, estado de cuenta, informe de avance, fichas, factura y reporte contable. Se pueden emitir nuevas versiones y anular.
 - Correo (Gmail): PDF, reportes, reporte diario, avisos automáticos y recordatorios de pago. Avisos por WhatsApp (wa.me).
 - Portal del cliente, buscador global, consultas con exportación a Excel y auditoría completa.
-- Copias de seguridad y restauración probadas, e instalador para servidor Ubuntu.
-- Pruebas automáticas: **88 verificaciones** (61 + 16 + 11), todas correctas al cerrar este corte.
+- Copias de seguridad y restauración probadas, e instalador para servidor Ubuntu que funciona desde el ZIP subido o desde GitHub.
+- Pruebas automáticas: **103 verificaciones** (61 + 16 + 11 + 15), todas correctas al cerrar este corte.
 
 ### Pendiente o fuera de este corte
 - **Consulta DGII en línea sin probar contra la DGII real:** desde el entorno de desarrollo no había acceso. Se verifica con *Probar consulta* en el servidor.
@@ -254,6 +271,7 @@ npm start                   # servidor en http://localhost:3000
 npm run test:e2e            # prueba completa (61 verificaciones)
 node test/contabilidad.js   # prueba de Contabilidad (16)
 node test/dgii.js           # prueba de consulta DGII (11)
+node test/papelera.js       # prueba de la papelera de facturas (15)
 npm run backup              # copia de seguridad
 ```
 

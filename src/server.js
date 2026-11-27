@@ -343,11 +343,11 @@ app.get('/api/clients/:id', auth(...STAFF), wrap(async (req, res) => {
       client,
       cases: await q(`SELECT cs.*, u.name AS responsible_name FROM cases cs LEFT JOIN users u ON u.id = cs.responsible_user_id WHERE cs.client_id = $1 ORDER BY cs.opened_on DESC`),
       quotes: await q('SELECT * FROM quotes WHERE client_id = $1 ORDER BY created_at DESC'),
-      payments: await q(`SELECT p.*, q.number AS quote_number, (SELECT id FROM generated_docs g WHERE g.payment_id = p.id AND g.doc_type='recibo_dinero' AND g.status <> 'reemplazado' ORDER BY version DESC LIMIT 1) AS receipt_id
+      payments: await q(`SELECT p.*, q.number AS quote_number, (SELECT id FROM generated_docs g WHERE g.payment_id = p.id AND g.doc_type='recibo_dinero' AND g.status <> 'reemplazado' AND NOT g.deleted ORDER BY version DESC LIMIT 1) AS receipt_id
                          FROM payments p JOIN quotes q ON q.id = p.quote_id WHERE p.client_id = $1 ORDER BY p.created_at DESC`),
       documents: await q('SELECT d.*, cs.code AS case_code FROM documents d LEFT JOIN cases cs ON cs.id = d.case_id WHERE d.client_id = $1 ORDER BY d.created_at DESC'),
       requests: await q('SELECT r.*, cs.code AS case_code FROM doc_requests r LEFT JOIN cases cs ON cs.id = r.case_id WHERE r.client_id = $1 ORDER BY r.created_at DESC'),
-      gendocs: await q("SELECT id, doc_type, number, version, title, status, shared, created_at, case_id FROM generated_docs WHERE client_id = $1 AND status <> 'reemplazado' ORDER BY created_at DESC"),
+      gendocs: await q("SELECT id, doc_type, number, version, title, status, shared, created_at, case_id FROM generated_docs WHERE client_id = $1 AND status <> 'reemplazado' AND NOT deleted ORDER BY created_at DESC"),
       users: await q('SELECT id, name, email, active, last_login, (password_hash IS NOT NULL) AS activated, invite_expires FROM users WHERE client_id = $1'),
       account: await S.account(c, id),
     };
@@ -401,7 +401,7 @@ app.get('/api/cases/:id', auth(...STAFF), wrap(async (req, res) => {
       deadlines: await q('SELECT d.*, u.name AS responsible_name FROM deadlines d LEFT JOIN users u ON u.id = d.responsible_user_id WHERE case_id = $1 ORDER BY due_at'),
       requests: await q('SELECT * FROM doc_requests WHERE case_id = $1 ORDER BY created_at DESC'),
       quotes: await q('SELECT id, number, title, total, status FROM quotes WHERE case_id = $1'),
-      gendocs: await q("SELECT id, doc_type, number, version, title, status, shared, created_at FROM generated_docs WHERE case_id = $1 AND status <> 'reemplazado' ORDER BY created_at DESC"),
+      gendocs: await q("SELECT id, doc_type, number, version, title, status, shared, created_at FROM generated_docs WHERE case_id = $1 AND status <> 'reemplazado' AND NOT deleted ORDER BY created_at DESC"),
     };
   }));
 }));
@@ -609,7 +609,7 @@ app.post('/api/quotes/:id/void', auth('admin', 'cobros'), wrap(async (req, res) 
 app.get('/api/payments', auth(...STAFF), wrap(async (req, res) => {
   const st = str(req.query.status);
   res.json(await db(req, async c => (await c.query(`SELECT p.*, cl.name AS client_name, q.number AS quote_number, us.name AS submitted_by_name, uv.name AS validated_by_name,
-      (SELECT id FROM generated_docs g WHERE g.payment_id = p.id AND g.doc_type='recibo_dinero' AND g.status <> 'reemplazado' ORDER BY version DESC LIMIT 1) AS receipt_id
+      (SELECT id FROM generated_docs g WHERE g.payment_id = p.id AND g.doc_type='recibo_dinero' AND g.status <> 'reemplazado' AND NOT g.deleted ORDER BY version DESC LIMIT 1) AS receipt_id
     FROM payments p JOIN clients cl ON cl.id = p.client_id JOIN quotes q ON q.id = p.quote_id LEFT JOIN users us ON us.id = p.submitted_by LEFT JOIN users uv ON uv.id = p.validated_by
     WHERE ($1::text IS NULL OR p.status = $1) ORDER BY (p.status = 'pendiente') DESC, p.created_at DESC LIMIT 500`, [st])).rows));
 }));
@@ -777,7 +777,7 @@ app.get('/api/search', auth(...STAFF), wrap(async (req, res) => {
       LEFT JOIN doc_types t ON t.id = d.doc_type_id
       WHERE d.resolution_number ILIKE $1 OR d.title ILIKE $1 OR d.filename ILIKE $1 OR d.institution ILIKE $1 OR t.name ILIKE $1 ORDER BY d.created_at DESC LIMIT 20`, [like])).rows,
     quotes: (await c.query(`SELECT q.id, q.number, q.title, q.total, q.status, cl.name AS client_name FROM quotes q JOIN clients cl ON cl.id = q.client_id WHERE q.number ILIKE $1 OR q.title ILIKE $1 LIMIT 20`, [like])).rows,
-    gendocs: (await c.query(`SELECT g.id, g.doc_type, g.number, g.version, g.title, g.status FROM generated_docs g WHERE (g.number ILIKE $1 OR g.title ILIKE $1) AND g.status <> 'reemplazado' LIMIT 20`, [like])).rows,
+    gendocs: (await c.query(`SELECT g.id, g.doc_type, g.number, g.version, g.title, g.status FROM generated_docs g WHERE (g.number ILIKE $1 OR g.title ILIKE $1) AND g.status <> 'reemplazado' AND NOT g.deleted LIMIT 20`, [like])).rows,
     payments: (await c.query(`SELECT p.id, p.reference, p.amount_declared, p.status, cl.name AS client_name FROM payments p JOIN clients cl ON cl.id = p.client_id WHERE p.reference ILIKE $1 LIMIT 20`, [like])).rows,
   })));
 }));
@@ -876,7 +876,7 @@ const QUERIES = {
       if (f.q) add("(i.number ILIKE '%'||?||'%' OR cl.name ILIKE '%'||?||'%' OR i.description ILIKE '%'||?||'%')", f.q);
       if (f.from) add('i.issue_date >= ?::date', f.from);
       if (f.to) add('i.issue_date <= ?::date', f.to);
-      if (f.annulled !== 'si') w.push("i.status = 'emitida'");
+      w.push('i.deleted_at IS NULL'); if (f.annulled !== 'si') w.push("i.status = 'emitida'");
       return { sql: `SELECT i.id, i.number, i.issue_date, i.due_date, cl.name AS client_name, cl.id_number, i.description, i.subtotal, i.itbis, i.expenses, i.total, i.status,
           (SELECT number FROM quotes WHERE id = i.quote_id) AS quote_number
         FROM invoices i JOIN clients cl ON cl.id = i.client_id ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ORDER BY i.issue_date DESC, i.id DESC`, p };
@@ -1010,7 +1010,7 @@ app.get('/api/portal', auth('cliente'), wrap(async (req, res) => {
         FROM payments p JOIN quotes q ON q.id = p.quote_id ORDER BY p.created_at DESC`)).rows,
       requests: (await c.query(`SELECT r.id, r.title, r.description, r.due_date, r.status, r.staff_note, r.client_note, r.updated_at, cs.code AS case_code,
           (SELECT count(*)::int FROM documents d WHERE d.request_id = r.id) AS files FROM doc_requests r LEFT JOIN cases cs ON cs.id = r.case_id ORDER BY (r.status = 'recibida'), r.due_date NULLS LAST`)).rows,
-      gendocs: (await c.query('SELECT id, doc_type, number, version, title, status, created_at FROM generated_docs ORDER BY created_at DESC')).rows,
+      gendocs: (await c.query('SELECT id, doc_type, number, version, title, status, created_at FROM generated_docs WHERE NOT deleted ORDER BY created_at DESC')).rows,
       documents: (await c.query('SELECT id, title, category, filename, created_at, uploaded_by_client, case_id FROM documents ORDER BY created_at DESC')).rows,
       account: await S.account(c, cid),
       invoices: await invoiceList(c, 'i.client_id = $1', [cid]),
@@ -1024,7 +1024,7 @@ app.get('/api/portal/cases/:id', auth('cliente'), wrap(async (req, res) => {
     return { case: cs,
       events: (await c.query('SELECT id, kind, title, description, event_date, document_id FROM case_events WHERE case_id = $1 ORDER BY event_date DESC, id DESC', [cs.id])).rows,
       documents: (await c.query('SELECT d.id, d.title, d.category, d.filename, d.created_at, d.doc_date, t.name AS doc_type_name FROM documents d LEFT JOIN doc_types t ON t.id = d.doc_type_id WHERE d.case_id = $1 ORDER BY d.created_at DESC', [cs.id])).rows,
-      gendocs: (await c.query('SELECT id, doc_type, number, version, title, status, created_at FROM generated_docs WHERE case_id = $1 ORDER BY created_at DESC', [cs.id])).rows };
+      gendocs: (await c.query('SELECT id, doc_type, number, version, title, status, created_at FROM generated_docs WHERE case_id = $1 AND NOT deleted ORDER BY created_at DESC', [cs.id])).rows };
   });
   if (!r) return res.status(404).json({ error: 'Expediente no encontrado' });
   res.json(r);
@@ -1284,7 +1284,7 @@ app.get('/api/folders', auth(...STAFF), wrap(async (req, res) => {
   res.json(await db(req, async c => (await c.query(`SELECT cl.id, cl.name, cl.id_type, cl.id_number, cl.kind, cl.folder_name,
       (SELECT count(*)::int FROM cases WHERE client_id = cl.id) AS cases,
       (SELECT count(*)::int FROM documents WHERE client_id = cl.id) AS documents,
-      (SELECT count(*)::int FROM generated_docs WHERE client_id = cl.id AND status <> 'reemplazado') AS emitidos,
+      (SELECT count(*)::int FROM generated_docs WHERE client_id = cl.id AND status <> 'reemplazado' AND NOT deleted) AS emitidos,
       greatest((SELECT max(created_at) FROM documents WHERE client_id = cl.id), (SELECT max(created_at) FROM generated_docs WHERE client_id = cl.id), cl.created_at) AS updated_at
     FROM clients cl ORDER BY cl.name`)).rows));
 }));
@@ -1294,19 +1294,19 @@ async function folderContents(c, clientId, f) {
   if (!client.folder_name) client.folder_name = await S.clientFolder(c, clientId);
   const cases = (await c.query(`SELECT cs.id, cs.code, cs.title, cs.status, cs.folder_name,
       (SELECT count(*)::int FROM documents d WHERE d.case_id = cs.id AND d.category <> 'voucher') AS documents,
-      (SELECT count(*)::int FROM generated_docs g WHERE g.case_id = cs.id AND g.status <> 'reemplazado') AS emitidos
+      (SELECT count(*)::int FROM generated_docs g WHERE g.case_id = cs.id AND g.status <> 'reemplazado' AND NOT g.deleted) AS emitidos
     FROM cases cs WHERE cs.client_id = $1 ORDER BY cs.opened_on DESC, cs.id DESC`, [clientId])).rows;
   for (const cs of cases) if (!cs.folder_name) cs.folder_name = await S.caseFolder(c, cs.id);
   const counts = (await c.query(`SELECT
       (SELECT count(*)::int FROM documents WHERE client_id = $1 AND case_id IS NULL AND category <> 'voucher' AND filing_id IS NULL) AS general,
       (SELECT count(*)::int FROM documents WHERE client_id = $1 AND filing_id IS NOT NULL) AS contabilidad,
       (SELECT count(*)::int FROM documents WHERE client_id = $1 AND category = 'voucher') AS pagos,
-      (SELECT count(*)::int FROM generated_docs WHERE client_id = $1 AND case_id IS NULL AND status <> 'reemplazado') AS emitidos`, [clientId])).rows[0];
+      (SELECT count(*)::int FROM generated_docs WHERE client_id = $1 AND case_id IS NULL AND status <> 'reemplazado' AND NOT deleted) AS emitidos`, [clientId])).rows[0];
   const out = { root: S.DOCROOT_NAME, client, cases, counts };
   if (!f) return out;
   const docs = q => c.query(`SELECT ${DOC_COLS} FROM documents d LEFT JOIN doc_types t ON t.id = d.doc_type_id LEFT JOIN users u ON u.id = d.uploaded_by WHERE d.client_id = $1 AND ${q} ORDER BY d.created_at DESC`, [clientId]).then(r => r.rows);
   const gds = q => c.query(`SELECT g.id, g.doc_type, g.number, g.version, g.title, g.status, g.shared, g.created_at, u.name AS author FROM generated_docs g LEFT JOIN users u ON u.id = g.created_by
-    WHERE g.client_id = $1 AND g.status <> 'reemplazado' AND ${q} ORDER BY g.created_at DESC`, [clientId]).then(r => r.rows);
+    WHERE g.client_id = $1 AND g.status <> 'reemplazado' AND NOT g.deleted AND ${q} ORDER BY g.created_at DESC`, [clientId]).then(r => r.rows);
   const m = /^case-(\d+)$/.exec(f);
   if (m) {
     const cs = cases.find(x => x.id === Number(m[1])); need(cs, 'Carpeta no encontrada', 404);
@@ -1593,10 +1593,10 @@ app.post('/api/clients/:id/credentials/:cid/reveal', auth(...STAFF), wrap(async 
 
 // ───────── facturas
 const INV_TONE = { pagada: 'ok', vencida: 'bad', parcial_vencida: 'bad', parcial: 'gold', pendiente: 'warn', anulada: 'bad' };
-async function invoiceList(c, where, params) {
-  const rows = (await c.query(`SELECT i.*, cl.name AS client_name, cl.email AS client_email, cl.phone AS client_phone, q.number AS quote_number, ins.seq AS inst_seq
-    FROM invoices i JOIN clients cl ON cl.id = i.client_id JOIN quotes q ON q.id = i.quote_id LEFT JOIN installments ins ON ins.id = i.installment_id
-    WHERE ${where} ORDER BY i.issue_date DESC, i.id DESC LIMIT 1000`, params)).rows;
+async function invoiceList(c, where, params, trash = false) {
+  const rows = (await c.query(`SELECT i.*, d.name AS deleted_by_name, cl.name AS client_name, cl.email AS client_email, cl.phone AS client_phone, q.number AS quote_number, ins.seq AS inst_seq
+    FROM invoices i JOIN clients cl ON cl.id = i.client_id JOIN quotes q ON q.id = i.quote_id LEFT JOIN installments ins ON ins.id = i.installment_id LEFT JOIN users d ON d.id = i.deleted_by
+    WHERE ${trash ? 'i.deleted_at IS NOT NULL' : 'i.deleted_at IS NULL'} AND (${where}) ORDER BY ${trash ? 'i.deleted_at DESC' : 'i.issue_date DESC, i.id DESC'} LIMIT 1000`, params)).rows;
   const accs = {};
   for (const r of rows) {
     if (r.installment_id && !accs[r.client_id]) accs[r.client_id] = await S.account(c, r.client_id);
@@ -1607,8 +1607,9 @@ async function invoiceList(c, where, params) {
 app.get('/api/invoices', auth(...STAFF), wrap(async (req, res) => {
   const p = []; let w = 'true';
   if (int(req.query.client_id)) { p.push(int(req.query.client_id)); w = 'i.client_id = $1'; }
-  let rows = await db(req, c => invoiceList(c, w, p));
   const st = str(req.query.state);
+  let rows = await db(req, c => invoiceList(c, w, p, st === 'papelera'));
+  if (st === 'papelera') return res.json(rows);
   if (st === 'pendientes') rows = rows.filter(r => ['pendiente', 'parcial'].includes(r.state.code));
   else if (st === 'vencidas') rows = rows.filter(r => ['vencida', 'parcial_vencida'].includes(r.state.code));
   else if (st) rows = rows.filter(r => r.state.code === st);
@@ -1642,13 +1643,55 @@ app.post('/api/invoices', auth('admin', 'cobros'), wrap(async (req, res) => {
 app.post('/api/invoices/:id/void', auth('admin', 'cobros'), wrap(async (req, res) => {
   const reason = str(req.body.reason); need(reason, 'El motivo de anulación es obligatorio');
   res.json(await db(req, async c => {
-    const inv = (await c.query("SELECT * FROM invoices WHERE id = $1 AND status = 'emitida' FOR UPDATE", [int(req.params.id)])).rows[0]; need(inv, 'Factura no encontrada o ya anulada', 404);
+    const inv = (await c.query("SELECT * FROM invoices WHERE id = $1 AND status = 'emitida' AND deleted_at IS NULL FOR UPDATE", [int(req.params.id)])).rows[0]; need(inv, 'Factura no encontrada o ya anulada', 404);
     await c.query("UPDATE invoices SET status = 'anulada', void_reason = $2 WHERE id = $1", [inv.id, reason]);
     const g = (await c.query("SELECT * FROM generated_docs WHERE doc_type = 'factura' AND number = $1 AND status = 'vigente'", [inv.number])).rows[0];
     if (g) await S.voidDocument(c, g, reason, req.user, req.ip);
     await A(c, req, 'anular', 'factura', inv.id, inv.client_id, { number: inv.number, reason });
     return { ok: true };
   }));
+}));
+
+// ───────── papelera de facturas: eliminar (restaurable), restaurar y borrar definitivamente
+app.post('/api/invoices/:id/delete', auth('admin', 'cobros'), wrap(async (req, res) => {
+  const reason = str(req.body.reason); need(reason, 'Indique el motivo para eliminar la factura');
+  res.json(await db(req, async c => {
+    const inv = (await c.query('SELECT * FROM invoices WHERE id = $1 AND deleted_at IS NULL FOR UPDATE', [int(req.params.id)])).rows[0]; need(inv, 'Factura no encontrada o ya está en la papelera', 404);
+    await c.query('UPDATE invoices SET deleted_at = now(), deleted_by = $2, delete_reason = $3 WHERE id = $1', [inv.id, req.user.id, reason]);
+    await c.query("UPDATE generated_docs SET deleted = true WHERE doc_type = 'factura' AND number = $1", [inv.number]);
+    await A(c, req, 'eliminar', 'factura', inv.id, inv.client_id, { number: inv.number, total: inv.total, status: inv.status, reason });
+    return { ok: true };
+  }));
+}));
+app.post('/api/invoices/:id/restore', auth('admin', 'cobros'), wrap(async (req, res) => {
+  res.json(await db(req, async c => {
+    const inv = (await c.query('SELECT * FROM invoices WHERE id = $1 AND deleted_at IS NOT NULL FOR UPDATE', [int(req.params.id)])).rows[0]; need(inv, 'Factura no encontrada en la papelera', 404);
+    if (inv.status === 'emitida') {
+      const dup = (await c.query(`SELECT number FROM invoices WHERE id <> $1 AND status = 'emitida' AND deleted_at IS NULL AND quote_id = $2
+        AND (CASE WHEN $3::int IS NULL THEN installment_id IS NULL ELSE installment_id = $3::int END)`, [inv.id, inv.quote_id, inv.installment_id])).rows[0];
+      need(!dup, `No se puede restaurar: ${inv.installment_id ? 'esa cuota' : 'esa cotización'} ya tiene la factura vigente ${dup?.number}. Anule esa factura primero.`, 409);
+    }
+    await c.query('UPDATE invoices SET deleted_at = NULL, deleted_by = NULL, delete_reason = NULL WHERE id = $1', [inv.id]);
+    await c.query("UPDATE generated_docs SET deleted = false WHERE doc_type = 'factura' AND number = $1", [inv.number]);
+    await A(c, req, 'restaurar', 'factura', inv.id, inv.client_id, { number: inv.number });
+    return { ok: true };
+  }));
+}));
+app.delete('/api/invoices/:id', auth('admin'), wrap(async (req, res) => {
+  const files = [];
+  const out = await db(req, async c => {
+    const inv = (await c.query('SELECT * FROM invoices WHERE id = $1 AND deleted_at IS NOT NULL FOR UPDATE', [int(req.params.id)])).rows[0];
+    need(inv, 'Solo se borran definitivamente las facturas que están en la papelera', 404);
+    need(str(req.body?.confirm).toUpperCase() === inv.number.toUpperCase(), `Para confirmar escriba el número de la factura: ${inv.number}`);
+    const gds = (await c.query("SELECT id, storage_key, void_storage_key FROM generated_docs WHERE doc_type = 'factura' AND number = $1 ORDER BY id DESC", [inv.number])).rows;
+    await c.query('DELETE FROM invoices WHERE id = $1', [inv.id]);
+    for (const g of gds) { await c.query('UPDATE generated_docs SET parent_id = NULL WHERE parent_id = $1', [g.id]); }
+    for (const g of gds) { await c.query('DELETE FROM generated_docs WHERE id = $1', [g.id]); files.push(g.storage_key, g.void_storage_key); }
+    await A(c, req, 'borrar_definitivo', 'factura', inv.id, inv.client_id, { snapshot: { number: inv.number, description: inv.description, issue_date: inv.issue_date, due_date: inv.due_date, total: inv.total, status: inv.status, delete_reason: inv.delete_reason } });
+    return { ok: true, number: inv.number };
+  });
+  for (const k of files) { if (!k) continue; try { const f = S.filePath(k); if (f && fs.existsSync(f)) fs.unlinkSync(f); } catch (e) { console.error('No se pudo borrar el archivo', k, e.message); } }
+  res.json(out);
 }));
 
 // ───────── avisos al cliente (correo y WhatsApp)
@@ -1670,7 +1713,7 @@ async function composeNotice(c, kind, clientId, ref, purl) {
     subject = kind === 'recordatorio_vencido' ? `Cuota vencida — ${cl.name}` : kind === 'recordatorio_previo' ? `Recordatorio de pago próximo — ${cl.name}` : `Aviso de pago — ${cl.name}`;
     body = `${hello}\n\n${kind === 'recordatorio_vencido' ? 'Le informamos que tiene cuota(s) vencida(s) pendiente(s) de pago:' : 'Le recordamos el estado de sus cuotas con LegalTax:'}\n${lines || '• No tiene cuotas pendientes.'}\n\nSaldo total pendiente: *${money(acc.totals.balance)}*${acc.totals.overdue > 0 ? `\nVencido: *${money(acc.totals.overdue)}*` : ''}\n\nPuede pagar por transferencia o depósito y subir el comprobante en el portal de clientes. Si ya realizó el pago, por favor ignore este mensaje.`;
   } else if (kind === 'pago_recibido') {
-    const p = (await c.query(`SELECT p.*, q.number AS quote_number, (SELECT id FROM generated_docs g WHERE g.payment_id = p.id AND g.doc_type='recibo_dinero' AND g.status <> 'reemplazado' ORDER BY version DESC LIMIT 1) AS gid
+    const p = (await c.query(`SELECT p.*, q.number AS quote_number, (SELECT id FROM generated_docs g WHERE g.payment_id = p.id AND g.doc_type='recibo_dinero' AND g.status <> 'reemplazado' AND NOT g.deleted ORDER BY version DESC LIMIT 1) AS gid
       FROM payments p JOIN quotes q ON q.id = p.quote_id WHERE p.id = $1 AND p.client_id = $2`, [int(ref), clientId])).rows[0]; need(p && p.status === 'validado', 'Pago validado no encontrado', 404);
     const g = (await c.query('SELECT * FROM generated_docs WHERE id = $1', [p.gid])).rows[0];
     const acc = await S.account(c, clientId);
@@ -1679,7 +1722,7 @@ async function composeNotice(c, kind, clientId, ref, purl) {
     attach = g;
   } else if (kind === 'factura' || kind === 'estado_factura') {
     const inv = (await invoiceList(c, 'i.id = $1 AND i.client_id = $2', [int(ref), clientId]))[0]; need(inv, 'Factura no encontrada', 404);
-    attach = (await c.query("SELECT * FROM generated_docs WHERE doc_type = 'factura' AND number = $1 AND status <> 'reemplazado' ORDER BY version DESC LIMIT 1", [inv.number])).rows[0];
+    attach = (await c.query("SELECT * FROM generated_docs WHERE doc_type = 'factura' AND number = $1 AND status <> 'reemplazado' AND NOT deleted ORDER BY version DESC LIMIT 1", [inv.number])).rows[0];
     if (kind === 'factura') {
       subject = `Factura ${inv.number} — ${money(inv.total)}`;
       body = `${hello}\n\nLe compartimos la factura *${inv.number}* por *${money(inv.total)}* (${inv.description}).\nFecha de vencimiento: *${dateStr(inv.due_date)}*.\n\nPuede descargarla en el portal de clientes. Al pagar, indique el número de factura como referencia.`;

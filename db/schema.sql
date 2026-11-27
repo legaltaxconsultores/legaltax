@@ -328,8 +328,15 @@ CREATE TABLE IF NOT EXISTS invoices (
   created_at     timestamptz NOT NULL DEFAULT now()
 );
 -- una cuota no se factura dos veces (salvo que la factura anterior se anule)
-CREATE UNIQUE INDEX IF NOT EXISTS one_invoice_per_installment ON invoices(installment_id) WHERE status = 'emitida' AND installment_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS one_full_invoice_per_quote ON invoices(quote_id) WHERE status = 'emitida' AND installment_id IS NULL;
+-- papelera de facturas: una factura eliminada se conserva (restaurable) hasta que Administración la borre definitivamente
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS deleted_by integer REFERENCES users(id);
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS delete_reason text;
+ALTER TABLE generated_docs ADD COLUMN IF NOT EXISTS deleted boolean NOT NULL DEFAULT false;
+DROP INDEX IF EXISTS one_invoice_per_installment;
+DROP INDEX IF EXISTS one_full_invoice_per_quote;
+CREATE UNIQUE INDEX IF NOT EXISTS one_invoice_per_installment2 ON invoices(installment_id) WHERE status = 'emitida' AND deleted_at IS NULL AND installment_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS one_full_invoice_per_quote2 ON invoices(quote_id) WHERE status = 'emitida' AND deleted_at IS NULL AND installment_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS notices (
   id             bigserial PRIMARY KEY,
@@ -466,10 +473,10 @@ CREATE POLICY client_write ON payments    FOR INSERT WITH CHECK (client_id = app
 CREATE POLICY client_read ON doc_requests FOR SELECT USING (client_id = app_client());
 CREATE POLICY client_update ON doc_requests FOR UPDATE USING (client_id = app_client() AND status IN ('pendiente','devuelta'))
                                                        WITH CHECK (client_id = app_client() AND status IN ('pendiente','devuelta'));
-CREATE POLICY client_read ON generated_docs FOR SELECT USING (client_id = app_client() AND shared AND status <> 'reemplazado');
+CREATE POLICY client_read ON generated_docs FOR SELECT USING (client_id = app_client() AND shared AND status <> 'reemplazado' AND NOT deleted);
 CREATE POLICY client_write ON audit_log   FOR INSERT WITH CHECK (app_role() = 'cliente');
 CREATE POLICY client_read ON saved_queries FOR SELECT USING (false);
-CREATE POLICY client_read ON invoices FOR SELECT USING (client_id = app_client() AND status = 'emitida');
+CREATE POLICY client_read ON invoices FOR SELECT USING (client_id = app_client() AND status = 'emitida' AND deleted_at IS NULL);
 CREATE POLICY client_read ON notices FOR SELECT USING (false);
 CREATE POLICY client_read ON tax_filings FOR SELECT USING (false);
 CREATE POLICY client_read ON client_tax_formats FOR SELECT USING (false);
